@@ -4,7 +4,7 @@ from sklearn.preprocessing import StandardScaler
 import torch
 from torch.distributions.normal import Normal
 import torch.nn as nn
-from constants import CIFAR_LOGITS_TEST_DATALOADER_PATH, CIFAR_LOGITS_TRAIN_DATALOADER_PATH, DATASET_DIR, DEVICE, EPSILON, IMAGENET_LOGITS_TRAIN_DATALOADER_PATH, IMAGENET_LOGITS_VAL_DATALOADER_PATH, MNIST_LOGITS_TRAIN_DATALOADER_PATH, NP_EPSILON, NUM_WORKERS, TEXTUAL_DATASETS
+from constants import IMAGENET_TRANSFORM, DATASET_DIR, DEVICE, EPSILON, IMAGENET_LOGITS_TRAIN_DATALOADER_PATH, IMAGENET_LOGITS_VAL_DATALOADER_PATH, MNIST_LOGITS_TRAIN_DATALOADER_PATH, NP_EPSILON, NUM_WORKERS, TEXTUAL_DATASETS
 import cw
 import torch.nn.functional as F
 from tqdm import tqdm
@@ -761,6 +761,10 @@ def prepare_run(dataset_name, device=DEVICE):
     elif dataset_name == 'imagenet':
         pretrained_model = torchvision.models.inception_v3(pretrained=True, transform_input=True)
         pretrained_path = f'./pretrained_models/inceptionv3.pkl'
+        train_dataset = ImageNet(root=DATASET_DIR, split='train', transform=IMAGENET_TRANSFORM)
+        val_dataset = ImageNet(root=DATASET_DIR, split='val', transform=IMAGENET_TRANSFORM)
+        train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=32, shuffle=True)
+        test_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=32, shuffle=True)
         classifier_layer_name = 'fc'
         batch_size = 32
     else:

@@ -27,7 +27,7 @@ git clone https://github.com/hopl1t/vub.git && cd vub
 poetry install
 ```
 
-Proceed to manually download the imagenet dataset to the vub/datasets/imagenet folder. The original experiment was performed over the full 153GB imagenet 2012 dataset. To access this dataset you must first sign up for imagenet at [link](https://www.image-net.org/signup.php).
+Proceed to manually download the imagenet dataset to the vub/datasets/imagenet folder. The original experiment was performed over the first 100K images of the imagenet 2012 dataset. To access this dataset you must first sign up for imagenet at [link](https://www.image-net.org/signup.php).
 The smaller 50K examples version can be downloaded from Kaggle either by this link: [link](https://www.kaggle.com/datasets/lijiyu/imagenet), or using the Kaggle API: `bash kaggle datasets download -d lijiyu/imagenet`.
 
 After you've downloaded the imagenet data to the /vub/imagenet folder (that should contain the 'train' and 'val' folders with images) you'll need to download the IMDB dataset, pretrained models for both imagenet and IMDB and then use these models to create a logits dataset (a dataset containing the values in the penultimate layer of each base model). This is all done using the prepare_run.py file very simply by:

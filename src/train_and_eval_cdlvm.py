@@ -451,7 +451,7 @@ def parse_args():
     parser.add_argument("--kl-rate-loss", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True, help="Use KLD instead of entropy in first part of rate term in VUB")
     parser.add_argument("--clip-grad", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True, help="Clip gradient")
     parser.add_argument("--clip-loss", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True, help="Clip rate term in loss function")
-    parser.add_argument("--seed", type=int, default=1, help="seed of the experiment")
+    parser.add_argument("--seed", type=int, default=0, help="seed of the experiment")
     parser.add_argument("--num-minibatches", type=int, default=1, help="Number of minibatches")
     parser.add_argument("--num-runs", type=int, default=1, help="Number of runs per beta")
     parser.add_argument("--num-epochs", type=int, default=0, help="Overide number of epochs")
@@ -463,9 +463,9 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    # random.seed(args.seed)
-    # np.random.seed(args.seed)
-    # torch.manual_seed(args.seed)
+    if args.seed:
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
     train_and_eval_cdlvm(data_class=args.data_class, betas=args.betas, epsilons=args.epsilons,
                          loss_type=args.loss_type, kl_rate_loss=args.kl_rate_loss, clip_grad=args.clip_grad,
                          clip_loss=args.clip_loss, num_minibatches=args.num_minibatches, num_runs=args.num_runs,

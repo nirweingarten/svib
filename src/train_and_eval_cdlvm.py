@@ -3,7 +3,7 @@ from distutils.util import strtobool
 import argparse
 import torch
 import numpy as np
-from classes import VIB, HybridModel
+from helper import VIB
 from constants import EPSILON, TEXTUAL_DATASETS
 import numpy as np
 import torch
@@ -13,7 +13,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.optim import lr_scheduler
 from tqdm import tqdm
-from helper import attack_and_eval, get_dataloaders, get_kld_between_multivariate_gaussians, get_multinomial_entropy, get_multivariate_gaussian_entropy, test_model
+from helper import LogitsDataset, HybridModel, attack_and_eval, get_dataloaders, get_kld_between_multivariate_gaussians, get_multinomial_entropy, get_multivariate_gaussian_entropy, test_model
 from transformer_cdlvm import TransformerVIB, TransformerHybridModel, text_attacks
 import wandb
 from torch.utils.tensorboard import SummaryWriter
@@ -209,7 +209,7 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
         pkl_name += '_clip_grad'
     if clip_loss:
         pkl_name += '_clip_loss'
-    save_path = f'/D/models/dicts/{pkl_name}_{formatted_time}.pkl'
+    save_path = f'./result_dicts/{pkl_name}_{formatted_time}.pkl'
 
     os.environ["WANDB_SILENT"] = "true"
 
@@ -219,7 +219,7 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
         epochs = 250
         hidden_size = 256
         output_size = 10
-        pretrained_path = '/D/models/pretrained/mnist_model.pkl'
+        pretrained_path = './pretrained_models/mnist_model.pkl'
         fc_name = 'fc2'
         target_label = 1
         max_grad_norm = 0.001
@@ -229,7 +229,7 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
         epochs = 100
         hidden_size = 1280
         output_size = 100
-        pretrained_path = '/D/models/pretrained/cifar_efficientnet.pkl'
+        pretrained_path = './pretrained_models/cifar_efficientnet.pkl'
         fc_name = '_fc'
         target_label = 15  # Camel
         max_grad_norm = 2.5
@@ -240,7 +240,7 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
         epochs = 100
         hidden_size = 2048
         output_size = 1000
-        pretrained_path = '/D/models/pretrained/inceptionv3.pkl'
+        pretrained_path = './pretrained_models/inceptionv3.pkl'
         target_label = 805  # soccer ball
         max_grad_norm = 5
         transformation_mean = (0.485, 0.456, 0.406)
@@ -250,7 +250,7 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
         epochs = 200
         hidden_size = 768
         output_size = 2
-        pretrained_path = f'/D/models/pretrained/pretrained_bert_{data_class}.pkl'
+        pretrained_path = f'./pretrained_models/pretrained_bert_{data_class}.pkl'
         target_label = 0  # Not relevant
         max_grad_norm = 5
     elif data_class.replace('-', '_') == 'mnli':
@@ -258,7 +258,7 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
         epochs = 200
         hidden_size = 768
         output_size = 3
-        pretrained_path = f'/D/models/pretrained/pretrained_bert_{data_class}.pkl'
+        pretrained_path = f'./pretrained_models/pretrained_bert_{data_class}.pkl'
         target_label = 0  # Not relevant
         max_grad_norm = 5
     elif data_class.replace('-', '_') == 'ag_news':
@@ -266,7 +266,7 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
         epochs = 200
         hidden_size = 768
         output_size = 4
-        pretrained_path = f'/D/models/pretrained/pretrained_bert_{data_class}.pkl'
+        pretrained_path = f'./pretrained_models/pretrained_bert_{data_class}.pkl'
         target_label = 0  # Not relevant
         max_grad_norm = 5
     else:
@@ -285,18 +285,18 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
         pretrained_model.to(device)
         pretrained_model.eval()
         vanilla_run_name = f'vanilla_model_{formatted_time}'
-        wandb_run = wandb.init(
-            project='dynamic_beta',
-            entity=None,
-            sync_tensorboard=True,
-            config=None,
-            name=vanilla_run_name,
-            monitor_gym=False,
-            save_code=True,)
+        # wandb_run = wandb.init(
+        #     project='dynamic_beta',
+        #     entity=None,
+        #     sync_tensorboard=True,
+        #     config=None,
+        #     name=vanilla_run_name,
+        #     monitor_gym=False,
+        #     save_code=True,)
         writer = SummaryWriter(f"runs/{vanilla_run_name}")
         test_accuracy = test_model(pretrained_model, test_data_loader)
         untargeted_accuracies, untargeted_examples, untargeted_total_succesful_attacks_list, targeted_accuracies, targeted_examples, targeted_total_succesful_attacks_list, avg_l2_dist_for_sx_targeted_attack = attack_and_eval(pretrained_model, device, test_data_loader, target_label, epsilons, mean=transformation_mean, std=transformation_std)
-        wandb_run.finish()
+        # wandb_run.finish()
         results_dict['pretrained_vanilla_model'] = {
             'dict_name': pkl_name,
             'beta': 0,
@@ -332,14 +332,14 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
     for beta in betas:
         for run_num in range(num_runs):
             run_name = f"{pkl_name}_beta_{beta}_run_{run_num}_{formatted_time}"
-            wandb_run = wandb.init(
-                project='dynamic_beta',
-                entity=None,
-                sync_tensorboard=True,
-                config=None,
-                name=run_name,
-                monitor_gym=False,
-                save_code=True,)
+            # wandb_run = wandb.init(
+            #     project='dynamic_beta',
+            #     entity=None,
+            #     sync_tensorboard=True,
+            #     config=None,
+            #     name=run_name,
+            #     monitor_gym=False,
+            #     save_code=True,)
             writer = SummaryWriter(f"runs/{run_name}")
 
             print(f"\n\n### Started training {run_name} ###")
@@ -432,12 +432,15 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
                 print(f"Exception occured: exploding gradient: {e}\n skipping...")
                 continue
             finally:
-                wandb_run.finish()
+                pass
+                # wandb_run.finish()
 
             with open(save_path, 'wb') as f:
                 pickle.dump(results_dict, f)
             print(f'Saved dict to {save_path}')
 
+# For debugging
+# train_and_eval_cdlvm('imdb', kl_rate_loss=False, clip_grad=False, clip_loss=True, loss_type='vub', num_minibatches=1, betas=[0.1], num_epochs=1)
 
 def parse_args():
     parser = argparse.ArgumentParser()

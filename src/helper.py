@@ -2,20 +2,265 @@ import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 import torch
+from torch.distributions.normal import Normal
 import torch.nn as nn
 from constants import CIFAR_LOGITS_TEST_DATALOADER_PATH, CIFAR_LOGITS_TRAIN_DATALOADER_PATH, DATASET_DIR, DEVICE, EPSILON, IMAGENET_LOGITS_TRAIN_DATALOADER_PATH, IMAGENET_LOGITS_VAL_DATALOADER_PATH, MNIST_LOGITS_TRAIN_DATALOADER_PATH, NP_EPSILON, NUM_WORKERS, TEXTUAL_DATASETS
 import cw
-from classes import HybridModel, LogitsDataset
 import torch.nn.functional as F
 from tqdm import tqdm
 from constants import MNIST_LOGITS_TEST_DATALOADER_PATH
+import torchvision
 from transformer_cdlvm import encode
 from datasets import load_dataset
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 from torchvision.datasets import CIFAR100, MNIST, ImageNet
+from transformers import BertForSequenceClassification, AutoTokenizer, PreTrainedModel
+from transformers.modeling_outputs import SequenceClassifierOutput
+from textattack.models.wrappers.huggingface_model_wrapper import HuggingFaceModelWrapper
+import dill
 import os
 import pickle
+
+
+class VIB(nn.Module):
+    """
+    Classifier with stochastic layer and KL regularization
+    """
+    def __init__(self, hidden_size, output_size, device):
+        super(VIB, self).__init__()
+        self.device = device
+        self.description = 'Vanilla IB VAE as per the paper'
+        self.hidden_size = hidden_size
+        self.k = hidden_size // 2
+        self.output_size = output_size
+        self.train_loss = []
+        self.test_loss = []
+
+        self.encoder = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU()
+        )
+        self.classifier = nn.Linear(self.k, output_size)
+
+        # Xavier initialization
+        for _, module in self._modules.items():
+            if isinstance(module, nn.Linear) or isinstance(module, nn.Conv2d):
+                        nn.init.xavier_uniform_(module.weight, gain=nn.init.calculate_gain('relu'))
+                        module.bias.data.zero_()
+                        continue
+            for layer in module:
+                if isinstance(layer, nn.Linear) or isinstance(layer, nn.Conv2d):
+                            nn.init.xavier_uniform_(layer.weight, gain=nn.init.calculate_gain('relu'))
+                            layer.bias.data.zero_()
+
+    def forward(self, x):
+        z_params = self.encoder(x)
+        mu = z_params[:, :self.k]
+        # softplus transformation (soft relu) and a -1 bias is added
+        std = F.softplus(z_params[:, self.k:] - 1, beta=1)
+        # std = z_params[:, self.k:]
+        # std = F.softplus(z_params[:, self.k:], beta=1)
+        if self.training:
+            z = reparametrize(mu, std, self.device)
+        else:
+            z = mu.clone().unsqueeze(0)
+        n = Normal(mu, std)
+        log_probs = n.log_prob(z.squeeze(0))  # These may be positive as this is a PDF
+        logits = self.classifier(z)
+        return (mu, std), log_probs, logits
+
+
+class MNIST_CNN(nn.Module):
+    def __init__(self):
+        super(MNIST_CNN, self).__init__()
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.dropout = nn.Dropout(0.25)
+        self.fc1 = nn.Linear(64 * 7 * 7 * 4, 256)
+        self.fc2 = nn.Linear(256, 10)
+
+    def forward(self, x):
+        x = F.relu(self.conv1(x))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = x.view(-1, 64 * 7 * 7 * 4)
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x
+
+
+class LogitsDataset(Dataset):
+    def __init__(self, data, labels):
+        self.data = data
+        self.labels = labels
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        x = self.data[idx]
+        y = self.labels[idx]
+        return x, y
+
+
+class HybridModel(nn.Module):
+    """
+    Head is a pretrained model, classifier is VIB
+    fc_name should be 'fc2' for inception-v3 (imagenet) and mnist-cnn, '_fc' for efficient-net (CIFAR)
+    """
+    def __init__(self, base_model, vib_model, device, fc_name, return_only_logits=False):
+        super(HybridModel, self).__init__()
+        self.device = device
+        self.base_model = base_model
+        setattr(self.base_model, fc_name, torch.nn.Identity())
+        self.vib_model = vib_model
+        self.train_loss = []
+        self.test_loss = []
+        self.freeze_base()
+        self.return_only_logits = return_only_logits
+
+    def set_return_only_logits(self, bool_value):
+        self.return_only_logits = bool_value
+
+    def freeze_base(self):
+        # Freeze the weights of the inception_model
+        for param in self.base_model.parameters():
+            param.requires_grad = False
+
+    def unfreeze_base(self):
+        # Freeze the weights of the inception_model
+        for param in self.base_model.parameters():
+            param.requires_grad = True
+
+    def forward(self, x):
+        encoded = self.base_model(x)
+        (mu, std), log_probs, logits = self.vib_model(encoded)
+        if self.return_only_logits:
+            return logits.squeeze(0)
+        else:
+            return ((mu, std), log_probs, logits)
+
+
+class TransformerVIB(nn.Module):
+    """
+    Classifier with stochastic layer and KL regularization
+    """
+    def __init__(self, hidden_size, output_size, device):
+        super(TransformerVIB, self).__init__()
+        self.device = device
+        self.description = 'Vanilla IB VAE as per the paper'
+        self.hidden_size = hidden_size
+        self.k = hidden_size // 2
+        self.output_size = output_size
+        self.train_loss = []
+        self.test_loss = []
+
+        self.encoder = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU()
+        )
+        self.classifier = nn.Linear(self.k, output_size)
+        # These are cheats to make 'drill' save everythung we need in one pickle
+        self.softplus = F.softplus
+        self.normal = torch.normal
+        self.Normal = Normal
+
+        # Xavier initialization
+        for _, module in self._modules.items():
+            if isinstance(module, nn.Linear) or isinstance(module, nn.Conv2d):
+                        nn.init.xavier_uniform_(module.weight, gain=nn.init.calculate_gain('relu'))
+                        module.bias.data.zero_()
+                        continue
+            for layer in module:
+                if isinstance(layer, nn.Linear) or isinstance(layer, nn.Conv2d):
+                            nn.init.xavier_uniform_(layer.weight, gain=nn.init.calculate_gain('relu'))
+                            layer.bias.data.zero_()
+        
+
+    def reparametrize(self, mu, std, device):
+        """
+        Performs reparameterization trick z = mu + epsilon * std
+        Where epsilon~N(0,1)
+        """
+        mu = mu.expand(1, *mu.size())
+        std = std.expand(1, *std.size())
+        eps = self.normal(0, 1, size=std.size()).to(device)
+        return mu + eps * std        
+        
+    def forward(self, x):
+        z_params = self.encoder(x)
+        mu = z_params[:, :self.k]
+#         std = torch.nn.functional.softplus(z_params[:, self.k:] - 1, beta=1)        
+        std = self.softplus(z_params[:, self.k:] - 1, beta=1)        
+        if self.training:
+            z = self.reparametrize(mu, std, self.device)
+        else:
+            z = mu.clone().unsqueeze(0)
+        n = self.Normal(mu, std)
+        log_probs = n.log_prob(z.squeeze(0))  # These may be positive as this is a PDF
+        
+        logits = self.classifier(z)
+        return (mu, std), log_probs, logits
+   
+
+class TransformerHybridModel(nn.Module):
+    """
+    Head is a pretrained model, classifier is VIB
+    fc_name should be 'fc2' for inception-v3 (imagenet) and mnist-cnn, '_fc' for efficient-net (CIFAR)
+    """
+    def __init__(self, base_model, vib_model, device, fc_name, return_only_logits=False):
+        super(TransformerHybridModel, self).__init__()
+        self.device = device
+        self.base_model = base_model
+        setattr(self.base_model, fc_name, torch.nn.Identity())
+        self.vib_model = vib_model
+        self.train_loss = []
+        self.test_loss = []
+        self.freeze_base()
+        self.return_only_logits = return_only_logits
+
+    def set_return_only_logits(self, bool_value):
+        self.return_only_logits = bool_value
+    
+    def freeze_base(self):
+        # Freeze the weights of the inception_model
+        for param in self.base_model.parameters():
+            param.requires_grad = False
+
+    def unfreeze_base(self):
+        # Freeze the weights of the inception_model
+        for param in self.base_model.parameters():
+            param.requires_grad = True
+
+    def forward(self, **kwargs):
+        encoded = self.base_model(kwargs['input_ids']).logits # This is not really logits, only called that way cause we've changed the final layer to identity
+        (mu, std), log_probs, logits = self.vib_model(encoded)
+        if self.return_only_logits:
+            return logits.squeeze(0)
+        else:
+            return ((mu, std), log_probs, logits)
+
+
+class TransformerAdaptor(PreTrainedModel):
+    """
+    Adapts between a TransformerHybridModel to a HuggingFaceModelWrapper
+    """
+    def __init__(self, hybrid_model):
+        super(TransformerAdaptor, self).__init__(hybrid_model.base_model.config)
+        self.hybrid_model = hybrid_model
+        self.SequenceClassifierOutput = SequenceClassifierOutput  # Cheat to overload drill pickle
+    
+    def forward(self, **kwargs):
+        if self.hybrid_model.return_only_logits:
+            logits = self.hybrid_model(**kwargs)
+        else:
+            ((_, _), _, logits) = self.hybrid_model(**kwargs)
+        return self.SequenceClassifierOutput(logits=logits[0])
 
 
 def get_dataloaders(data_class, logits=False):
@@ -28,7 +273,7 @@ def get_dataloaders(data_class, logits=False):
             return train_data_loader, val_data_loader
         else:
             dataset = MNIST
-            dataset_dir = '/D/datasets/MNIST'
+            dataset_dir = './datasets/MNIST'
             batch_size = 128
             train_transform = transforms.Compose(
                 [transforms.Resize((28, 28)), transforms.ToTensor()])
@@ -45,7 +290,7 @@ def get_dataloaders(data_class, logits=False):
             return train_data_loader, val_data_loader
         else:
             dataset = CIFAR100
-            dataset_dir = '/D/datasets/CIFAR'
+            dataset_dir = './datasets/CIFAR'
             batch_size = 32
             train_transform = transforms.Compose([
                 transforms.Resize(224),
@@ -71,7 +316,7 @@ def get_dataloaders(data_class, logits=False):
             return train_data_loader, val_data_loader
         else:
             dataset = ImageNet
-            dataset_dir = '/D/datasets/imagenet/'
+            dataset_dir = './datasets/imagenet/'
             batch_size = 32
             # TODO: Consider adding data augmentation to train transform
             train_transform = transforms.Compose([
@@ -86,8 +331,8 @@ def get_dataloaders(data_class, logits=False):
 
     elif data_class in TEXTUAL_DATASETS:
         if logits:
-            logits_train_dataloader_path = f'/D/datasets/{data_class}/logits_dataloaders/logits_train_dataloader.pkl'
-            logits_test_dataloader_path = f'/D/datasets/{data_class}/logits_dataloaders/logits_test_dataloader.pkl'
+            logits_train_dataloader_path = f'./datasets/{data_class}/logits_dataloaders/logits_train_dataloader.pkl'
+            logits_test_dataloader_path = f'./datasets/{data_class}/logits_dataloaders/logits_test_dataloader.pkl'
             with open(logits_train_dataloader_path, 'rb') as f:
                 train_data_loader = pickle.load(f)
             with open(logits_test_dataloader_path, 'rb') as f:
@@ -149,6 +394,7 @@ def fgsm_attack(data, epsilon, data_grad, is_targeted=False, is_image=True):
         perturbed_data = torch.clamp(perturbed_data, 0, 1)
     # Return the perturbed image
     return perturbed_data
+
 
 
 def run_adverserial_attacks(model, device, test_loader, epsilon, target_label=None, is_image=True, print_results=False, attack_type='fgs', mean=(), std=()):
@@ -472,3 +718,71 @@ def test_model(model, test_data_loader, device=DEVICE):
     acc = (total_correct / (total_correct + total_incorrect)).item()
     print(f"acc: {acc}")
     return acc
+
+def get_transformer_logits_dataloader(model, original_loader, device, batch_size=8):
+    logits_data_list = []
+    logits_labels_list = []
+    with torch.no_grad():
+        for data_dict in tqdm(original_loader):
+            x = data_dict['input_ids']
+            y = data_dict['label']
+            output = model(x.to(device))
+            logits = output.logits
+            logits_data_list.append(logits.to(torch.device('cpu')))
+            logits_labels_list.append(y.to(torch.device('cpu')))
+
+    logits_data_set = LogitsDataset(torch.concat(logits_data_list), torch.concat(logits_labels_list))
+    logits_dataloader = DataLoader(logits_data_set, batch_size=batch_size, shuffle=True)
+    return logits_dataloader
+
+
+def create_directory(path):
+    dirname = os.path.dirname(path)
+    if not os.path.exists(dirname):
+        os.makedirs(dirname)
+    else:
+        print(f"The directory {dirname} already exists")
+
+
+def prepare_run(dataset_name, device=DEVICE):
+    if dataset_name in TEXTUAL_DATASETS:
+        pretrained_model = BertForSequenceClassification.from_pretrained('textattack/bert-base-uncased-' + dataset_name.replace('_','-'))
+        pretrained_path = f'./pretrained_models/pretrained_bert_{dataset_name}.pkl'
+        create_directory(pretrained_path)
+        dataset = load_dataset(dataset_name)
+        dataset = dataset.map(encode, batched=True)
+        dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'label'])
+        train_dataset = dataset['train']
+        test_dataset = dataset['test']
+        train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=32)
+        test_dataloader = DataLoader(test_dataset, shuffle=True, batch_size=32)
+        classifier_layer_name = 'classifier'
+        batch_size = 16
+    elif dataset_name == 'imagenet':
+        pretrained_model = torchvision.models.inception_v3(pretrained=True, transform_input=True)
+        pretrained_path = f'./pretrained_models/inceptionv3.pkl'
+        classifier_layer_name = 'fc'
+        batch_size = 32
+    else:
+        raise NotImplementedError
+    with open(pretrained_path, 'wb') as f:
+        dill.dump(pretrained_model, f)
+    print(f'Saved model to {pretrained_path}')
+    pretrained_model.__setattr__(classifier_layer_name, torch.nn.Identity())
+    pretrained_model.to(device)
+    logits_train_dataloader = get_transformer_logits_dataloader(pretrained_model, train_dataloader, batch_size=batch_size, device=device)
+    logits_test_dataloader = get_transformer_logits_dataloader(pretrained_model, test_dataloader, batch_size=batch_size, device=device)
+    
+    logits_train_dataloader_path = f'./datasets/{dataset_name}/logits_dataloaders/logits_train_dataloader.pkl'
+    logits_test_dataloader_path = f'./datasets/{dataset_name}/logits_dataloaders/logits_test_dataloader.pkl'
+    create_directory(logits_train_dataloader_path)
+    
+    if (not os.path.isdir(logits_train_dataloader_path)) or (not os.path.isdir(logits_test_dataloader_path)):
+        os.makedirs(os.path.dirname(logits_train_dataloader_path), exist_ok=True)
+        os.makedirs(os.path.dirname(logits_test_dataloader_path), exist_ok=True)
+        
+    with open(logits_train_dataloader_path, 'wb') as f:
+        pickle.dump(logits_train_dataloader, f)
+    with open(logits_test_dataloader_path, 'wb') as f:
+        pickle.dump(logits_test_dataloader, f)
+    print('Saved dataloaders!')

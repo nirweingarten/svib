@@ -1,12 +1,7 @@
 import torch
-from transformers import BertForSequenceClassification, TrainingArguments, Trainer
-from transformers import AutoModel, AutoTokenizer
-from torch.nn import Identity
-import torch.nn as nn
-from datasets import load_dataset
 from transformers import AutoTokenizer
-import pickle
-import dill
+import torch.nn as nn
+from transformers import AutoTokenizer
 from textattack.models.wrappers.huggingface_model_wrapper import HuggingFaceModelWrapper
 from transformers import PreTrainedModel
 from torch.utils.data import DataLoader
@@ -14,7 +9,6 @@ import torch.nn.functional as F
 from torch.distributions.normal import Normal
 import transformers
 from transformers.modeling_outputs import SequenceClassifierOutput
-
 from textattack.datasets import HuggingFaceDataset
 from textattack.attack_recipes import BAEGarg2019, DeepWordBugGao2018, PWWSRen2019
 from textattack.goal_functions import UntargetedClassification

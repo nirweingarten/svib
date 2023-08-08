@@ -1,7 +1,8 @@
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import torch
 from transformers import AutoTokenizer
 import torch.nn as nn
-from transformers import AutoTokenizer
 from textattack.models.wrappers.huggingface_model_wrapper import HuggingFaceModelWrapper
 from transformers import PreTrainedModel
 from torch.utils.data import DataLoader
@@ -19,7 +20,6 @@ from textattack.metrics.attack_metrics import (
     AttackSuccessRate,
     WordsPerturbed,
 )
-import os
 
 
 ATTACK_TYPES = {
@@ -71,23 +71,24 @@ class TransformerVIB(nn.Module):
                         layer.weight, gain=nn.init.calculate_gain('relu'))
                     layer.bias.data.zero_()
 
-    def reparametrize(self, mu, std, device):
+    def reparametrize(self, mu, std):
         """
         Performs reparameterization trick z = mu + epsilon * std
         Where epsilon~N(0,1)
         """
-        mu = mu.expand(1, *mu.size())
-        std = std.expand(1, *std.size())
-        eps = self.normal(0, 1, size=std.size()).to(device)
+        mu = mu.to(self.device).expand(1, * mu.size())
+        std = std.to(self.device).expand(1, *std.size())
+        eps = self.normal(0, 1, size=std.size()).to(self.device)
         return mu + eps * std
 
     def forward(self, x):
+        x = x.to(self.device)
         z_params = self.encoder(x)
         mu = z_params[:, :self.k]
 #         std = torch.nn.functional.softplus(z_params[:, self.k:] - 1, beta=1)
         std = self.softplus(z_params[:, self.k:] - 1, beta=1)
         if self.training:
-            z = self.reparametrize(mu, std, self.device)
+            z = self.reparametrize(mu, std)
         else:
             z = mu.clone().unsqueeze(0)
         n = self.Normal(mu, std)
@@ -130,7 +131,7 @@ class TransformerHybridModel(nn.Module):
 
     def forward(self, **kwargs):
         # This is not really logits, only called that way cause we've changed the final layer to identity
-        encoded = self.base_model(kwargs['input_ids']).logits
+        encoded = self.base_model(kwargs['input_ids'].to(self.device)).logits
         (mu, std), log_probs, logits = self.vib_model(encoded)
         if self.return_only_logits:
             return logits.squeeze(0)
@@ -168,7 +169,7 @@ def encode(examples):
 
 def attack_model(attack, dataset):
     attack_args = AttackArgs(
-        num_examples=100,
+        num_examples=200,
         disable_stdout=True,
         silent=True,
         enable_advance_metrics=False
@@ -187,29 +188,28 @@ def attack_model(attack, dataset):
     return original_acc, [acc_under_attack], avg_pertrubed_words_prct, attack_success_rate
 
 
-def text_attacks(hybrid_model, dataset_name, attack_type='BAEGarg2019'):
+def text_attacks(hybrid_model, dataset_name, device):
     """
     Performs deep word bug and pwws untargeted blackbox attacks using the textattack API
     """
     os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # supress noisy tf logs
+    if device.index:
+        # make sure textattack uses the specified device
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(device.index)
     tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
     model_adaptor = TransformerAdaptor(hybrid_model)
+    model_adaptor = model_adaptor.to(device)
     model_wrapper = HuggingFaceModelWrapper(model_adaptor, tokenizer)
+    model_wrapper.to(device)
 
-    if dataset_name == 'yelp':
-        dataset = HuggingFaceDataset("yelp_polarity", None, "test")
-    elif dataset_name == 'cola':
-        dataset = HuggingFaceDataset("glue", 'cola', "test")
-    elif dataset_name == 'mnli':
-        dataset = HuggingFaceDataset("glue", 'mnli', "validation_matched")
-    elif dataset_name in ('ag_news', 'imdb'):
+    if dataset_name in ('ag_news', 'imdb'):
         dataset = HuggingFaceDataset(dataset_name, None, "test")
     else:
         raise NotImplementedError
 
     deep_word_bug_attack = DeepWordBugGao2018.build(model_wrapper)
     pwws_attack = PWWSRen2019.build(model_wrapper)
-
+    
     print('### Running Deep Word Bug attack')
     original_acc, deep_word_acc_under_attack, deep_word_avg_pertrubed_words_prct, deep_word_attack_success_rate = attack_model(deep_word_bug_attack, dataset)
     print('### Running PWWS attack')

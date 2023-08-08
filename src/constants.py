@@ -7,8 +7,7 @@ class SupportedDatasets(Enum):
     IMAGENET = auto()
     IMDB = auto()
 
-DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-EPSILON = torch.tensor(1e-40).to(DEVICE)
+EPSILON = torch.tensor(1e-40)
 NP_EPSILON = 1e-300
 DATASET_DIR = './datasets/imagenet/'
 TEXTUAL_DATASETS = ('yelp', 'imdb', 'ag_news', 'cola', 'mnli')  # mr movie review (rotten tomatoes), rte

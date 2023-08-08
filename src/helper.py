@@ -1,10 +1,12 @@
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 import torch
 from torch.distributions.normal import Normal
 import torch.nn as nn
-from constants import IMAGENET_TRANSFORM, DATASET_DIR, DEVICE, EPSILON, IMAGENET_LOGITS_TRAIN_DATALOADER_PATH, IMAGENET_LOGITS_VAL_DATALOADER_PATH, MNIST_LOGITS_TRAIN_DATALOADER_PATH, NP_EPSILON, NUM_WORKERS, TEXTUAL_DATASETS
+from constants import IMAGENET_TRANSFORM, DATASET_DIR, EPSILON, IMAGENET_LOGITS_TRAIN_DATALOADER_PATH, IMAGENET_LOGITS_VAL_DATALOADER_PATH, MNIST_LOGITS_TRAIN_DATALOADER_PATH, NP_EPSILON, NUM_WORKERS, TEXTUAL_DATASETS
 import cw
 import torch.nn.functional as F
 from tqdm import tqdm
@@ -673,32 +675,7 @@ def get_multivariate_gaussian_entropy(std, epsilon=EPSILON, num_logs=64):
     return torch.maximum(epsilon, ((D / 2) * (1 + np.log(2 * np.pi)) + 0.5 * log_term)).mean()
 
 
-def get_logits_dataloader(model, original_loader, batch_size=32, whiten=False, device=DEVICE):
-    logits_data_list = []
-    logits_labels_list = []
-    with torch.no_grad():
-        for x, y in tqdm(original_loader):
-            logits = model(x.to(device))
-            logits_data_list.append(logits.to(torch.device('cpu')))
-            logits_labels_list.append(y.to(torch.device('cpu')))
-
-    logits_data_set = LogitsDataset(torch.concat(logits_data_list), torch.concat(logits_labels_list))
-    logits_dataloader = DataLoader(logits_data_set, batch_size=batch_size, shuffle=True)
-    if whiten:
-        # Apply whitening to the features
-        scaler = StandardScaler()
-        outputs = scaler.fit_transform(torch.concat(logits_data_list).numpy())
-        pca = PCA()
-        whitened = pca.fit_transform(outputs)
-
-        whitened_logits_data_set = LogitsDataset(whitened, torch.concat(logits_labels_list))
-        whitened_logits_dataloader = DataLoader(whitened_logits_data_set, batch_size=batch_size, shuffle=True)
-        return whitened_logits_dataloader
-    else:
-        return logits_dataloader
-
-
-def test_model(model, test_data_loader, device=DEVICE):
+def test_model(model, test_data_loader, device):
     model.eval()
     total_correct = 0
     total_incorrect = 0
@@ -744,7 +721,7 @@ def create_directory(path):
         print(f"The directory {dirname} already exists")
 
 
-def prepare_run(dataset_name, device=DEVICE):
+def prepare_run(dataset_name, device):
     if dataset_name in TEXTUAL_DATASETS:
         pretrained_model = BertForSequenceClassification.from_pretrained('textattack/bert-base-uncased-' + dataset_name.replace('_','-'))
         pretrained_path = f'./pretrained_models/pretrained_bert_{dataset_name}.pkl'
@@ -770,7 +747,7 @@ def prepare_run(dataset_name, device=DEVICE):
     else:
         raise NotImplementedError
     with open(pretrained_path, 'wb') as f:
-        dill.dump(pretrained_model, f)
+        dill.dump(pretrained_model.to('cpu'), f)
     print(f'Saved model to {pretrained_path}')
     pretrained_model.__setattr__(classifier_layer_name, torch.nn.Identity())
     pretrained_model.to(device)

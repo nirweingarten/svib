@@ -1,10 +1,12 @@
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 from datetime import datetime
 from distutils.util import strtobool
 import argparse
 import torch
 import numpy as np
 from helper import VIB
-from constants import EPSILON, TEXTUAL_DATASETS
+from constants import TEXTUAL_DATASETS, EPSILON
 import numpy as np
 import torch
 import os
@@ -24,6 +26,7 @@ def loop_data(model, train_dataloader, test_dataloader, beta, gamma, writer, epo
               num_minibatches=1,  loss_type='vib',
               clip_grad=False, clip_loss=False, kl_rate_loss=False, max_grad_norm=2):
 
+    epsilon = EPSILON.to(device)
     model.train()
 
     epoch_h_z_x_array = np.zeros(epochs)
@@ -40,30 +43,14 @@ def loop_data(model, train_dataloader, test_dataloader, beta, gamma, writer, epo
         epoch_rate_term = 0
         epoch_distortion_term = 0
 
-        if loss_type == 'dyn_beta':
-            if e < 2:
-                beta = EPSILON
-            else:
-                with torch.no_grad():
-                    epoch_i_z_x_delta = epoch_h_z_x_array[e - 1] - epoch_h_z_x_array[e - 2]
-                    epoch_i_z_y_delta = epoch_h_z_y_array[e - 1] - epoch_h_z_y_array[e - 2] 
-                    beta = epoch_i_z_y_delta / epoch_i_z_x_delta
-                    if (epoch_i_z_x_delta == 0) or (beta > 1):
-                        beta = EPSILON
-
         for batch_num, (embeddings, labels) in enumerate(train_dataloader):
-            # Compute base z distribution
-            if loss_type == 'ppo':
-                with torch.no_grad():
-                    x = embeddings.to(device)
-                    (base_mu, base_std), base_log_probs, _ = model(x)
 
             for i in range(num_minibatches):
                 x = embeddings.to(device)
                 y = labels.to(device)
                 (mu, std), log_probs, logits = model(x)
-                batch_h_z_x = get_multivariate_gaussian_entropy(std)
-                batch_h_z_y = get_multinomial_entropy(logits)
+                batch_h_z_x = get_multivariate_gaussian_entropy(std, epsilon)
+                batch_h_z_y = get_multinomial_entropy(logits, epsilon)
 
                 with torch.no_grad():
                     epoch_h_z_x_array[e] += batch_h_z_x.cpu().detach() / len(train_dataloader)
@@ -77,28 +64,16 @@ def loop_data(model, train_dataloader, test_dataloader, beta, gamma, writer, epo
                 if kl_rate_loss:
                     rate_term = kld_from_std_normal.sum() - batch_h_z_x
                 else:
-                    rate_term = get_multivariate_gaussian_entropy(torch.ones(std.shape[-1]).unsqueeze(0).to(device)) - batch_h_z_x
+                    rate_term = get_multivariate_gaussian_entropy(torch.ones(std.shape[-1]).unsqueeze(0).to(device), epsilon) - batch_h_z_x
                 distortion_term = classification_loss - batch_h_z_y
                 epoch_rate_term += rate_term.item() / len(train_dataloader)
                 epoch_distortion_term += distortion_term.item() / len(train_dataloader)
 
-                if loss_type == 'ppo':
-                    if i == 0:
-                        kld_from_base_dist = 0
-                        ratio = 0
-                    else:
-                        with torch.no_grad():
-                            kld_from_base_dist = get_kld_between_multivariate_gaussians(base_mu, base_std, mu, std).mean()
-                    with torch.no_grad():
-                        ratio = kld_from_base_dist / \
-                            (kld_from_std_normal + kld_from_base_dist)
-                    minibatch_loss = classification_loss + \
-                        (beta * ratio).mean() * kld_from_std_normal.sum()
-                elif loss_type == 'vub':
+                if loss_type == 'vub':
                     if clip_loss:
                         max_regularization_value = (abs(beta) * classification_loss).item()
                         min_regularization_value = torch.tensor(0).to(device)
-                        minibatch_loss = torch.clamp(abs(gamma) * rate_term, min=min_regularization_value, max=(max_regularization_value)) + classification_loss - torch.clamp(beta * batch_h_z_y, min=min_regularization_value, max=max_regularization_value)
+                        minibatch_loss = abs(gamma) * torch.clamp(rate_term, min=min_regularization_value, max=(max_regularization_value)) + classification_loss - torch.clamp(beta * batch_h_z_y, min=min_regularization_value, max=max_regularization_value)
                     else:
                         minibatch_loss = - batch_h_z_x + beta * (classification_loss - batch_h_z_y)
                 elif loss_type == 'vib':
@@ -117,15 +92,6 @@ def loop_data(model, train_dataloader, test_dataloader, beta, gamma, writer, epo
                 with torch.no_grad():
                     epoch_total_kld += kld_from_std_normal / num_minibatches
                     epoch_classification_loss += classification_loss.item() / num_minibatches
-                    if loss_type == 'ppo':
-                        if i == 0:
-                            epoch_ratio1 += ratio
-                        elif i == 1:
-                            epoch_ratio2 += ratio
-                        elif i == 2:
-                            epoch_ratio3 += ratio
-                        elif i == 3:
-                            epoch_ratio4 += ratio
 
             epoch_loss += minibatch_loss.item()
 
@@ -149,21 +115,6 @@ def loop_data(model, train_dataloader, test_dataloader, beta, gamma, writer, epo
 
         if loss_type == 'dyn_beta':
             writer.add_scalar("charts/epoch_dyn_beta", beta, e)
-
-        if loss_type == 'ppo':
-            writer.add_scalar(
-                "charts/epoch_ratio1", epoch_ratio1 / len(train_dataloader), e)
-            writer.add_scalar(
-                "charts/epoch_ratio2", epoch_ratio2 / len(train_dataloader), e)
-            writer.add_scalar(
-                "charts/epoch_ratio3", epoch_ratio3 / len(train_dataloader), e)
-            writer.add_scalar(
-                "charts/epoch_ratio4", epoch_ratio4 / len(train_dataloader), e)
-            writer.add_scalar(
-                "charts/avg_epoch_ratio", (epoch_ratio1 + epoch_ratio2 +
-                                        epoch_ratio3 + epoch_ratio4) / (len(train_dataloader) * 4), e)
-            writer.add_scalar(
-                "charts/total_epoch_ratio", (epoch_ratio1 + epoch_ratio2 + epoch_ratio3 + epoch_ratio4) / len(train_dataloader), e)
 
         if (not ((e + 1) % 10)) or (e == 0):
             # test loss
@@ -194,7 +145,7 @@ def loop_data(model, train_dataloader, test_dataloader, beta, gamma, writer, epo
 def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100, 1000], gamma=1,
                          epsilons=[0.1, 0.35, 0.4, 0.45, 0.5], loss_type='vib',
                           kl_rate_loss=False, clip_grad=False, clip_loss=True,
-                         num_minibatches=1, num_runs=1, num_epochs=0, text_attack_type='BAEGarg2019'):
+                         num_minibatches=1, num_runs=1, num_epochs=0, text_attack_type='BAEGarg2019', device_name='cpu'):
     """
     CDLVM == conditional deep latent variational model
     """
@@ -213,7 +164,8 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
 
     os.environ["WANDB_SILENT"] = "true"
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device(device_name)
+    print(f'Using device {device_name}')
 
     if data_class == 'mnist':
         epochs = 250
@@ -272,7 +224,7 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
     else:
         raise NotImplementedError
     
-    if num_epochs:
+    if num_epochs >= 0:
         print(f'### Overiding original epochs of {epochs} with user defined {num_epochs}')
         epochs = num_epochs
 
@@ -294,7 +246,7 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
         #     monitor_gym=False,
         #     save_code=True,)
         writer = SummaryWriter(f"runs/{vanilla_run_name}")
-        test_accuracy = test_model(pretrained_model, test_data_loader)
+        test_accuracy = test_model(pretrained_model, test_data_loader, device)
         untargeted_accuracies, untargeted_examples, untargeted_total_succesful_attacks_list, targeted_accuracies, targeted_examples, targeted_total_succesful_attacks_list, avg_l2_dist_for_sx_targeted_attack = attack_and_eval(pretrained_model, device, test_data_loader, target_label, epsilons, mean=transformation_mean, std=transformation_std)
         # wandb_run.finish()
         results_dict['pretrained_vanilla_model'] = {
@@ -357,17 +309,17 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
                         num_minibatches=num_minibatches, writer=writer, epochs=epochs, device=device,
                         optimizer=optimizer, scheduler=scheduler, loss_type=loss_type,
                         clip_grad=clip_grad, clip_loss=clip_loss, max_grad_norm=max_grad_norm,
-                          kl_rate_loss=kl_rate_loss)
+                        kl_rate_loss=kl_rate_loss)
                 print(f'### Finished training, evaluating... ###')
                 
                 if data_class in TEXTUAL_DATASETS:
                     with open(pretrained_path, 'rb') as f:
                         pretrained_model = pickle.load(f)
-                    pretrained_model.to(device)
+                    pretrained_model = pretrained_model.to(device)
                     hybrid_model = TransformerHybridModel(pretrained_model, vib_classifier, device, fc_name=fc_name)
                     hybrid_model.freeze_base()
-                    hybrid_model.to(device)
-                    test_accuracy, deep_word_acc_under_attack, deep_word_avg_pertrubed_words_prct, deep_word_attack_success_rate, pwws_acc_under_attack, pwws_avg_pertrubed_words_prct, pwws_attack_success_rate = text_attacks(hybrid_model, data_class)
+                    hybrid_model = hybrid_model.to(device)
+                    test_accuracy, deep_word_acc_under_attack, deep_word_avg_pertrubed_words_prct, deep_word_attack_success_rate, pwws_acc_under_attack, pwws_avg_pertrubed_words_prct, pwws_attack_success_rate = text_attacks(hybrid_model, data_class, device)
                     results_dict[run_name] = {
                         'dict_name': pkl_name,
                         'vib_classifier': vib_classifier.to('cpu'),
@@ -392,7 +344,7 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
                         ')
 
                 else:
-                    test_accuracy = test_model(vib_classifier, logits_test_data_loader)
+                    test_accuracy = test_model(vib_classifier, logits_test_data_loader, device)
                     pretrained_model = torch.load(pretrained_path)
                     pretrained_model.to(device)
                     hybrid_model = HybridModel(pretrained_model, vib_classifier, device, fc_name=fc_name)
@@ -440,26 +392,25 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
             print(f'Saved dict to {save_path}')
 
 # For debugging
-# train_and_eval_cdlvm('imdb', kl_rate_loss=False, clip_grad=False, clip_loss=True, loss_type='vub', num_minibatches=1, betas=[0.1], num_epochs=1)
+# train_and_eval_cdlvm('imdb', kl_rate_loss=False, clip_grad=False, clip_loss=True, loss_type='vub', num_minibatches=1, betas=[0.1], num_epochs=0, gamma=0.1)
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-class", type=str, default="mnist", help="Kind of dataset to use: mnist, cifar, imagenet or yelp")
+    parser.add_argument("--device", type=str, default="cpu", help="device to use, defaults to cpu")
     parser.add_argument("--betas", nargs='+', type=float, default=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100, 1000], help="Betas to use for VIB or VUB")
     parser.add_argument("--gamma", type=float, default=1, help="Optional hyperparameter to scale the rate term")
     parser.add_argument("--epsilons", nargs='+', type=float, default=[0.1, 0.35, 0.4, 0.45, 0.5], help="Epsilons to use for FGSM")
-    parser.add_argument("--loss-type", type=str, default="vib", help="Which loss function to use: Either VIB, VUB or PPO or Vanilla")
+    parser.add_argument("--loss-type", type=str, default="vib", help="Which loss function to use: Either VIB, VUB or Vanilla")
     parser.add_argument("--kl-rate-loss", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True, help="Use KLD instead of entropy in first part of rate term in VUB")
     parser.add_argument("--clip-grad", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True, help="Clip gradient")
     parser.add_argument("--clip-loss", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True, help="Clip rate term in loss function")
     parser.add_argument("--seed", type=int, default=0, help="seed of the experiment")
     parser.add_argument("--num-minibatches", type=int, default=1, help="Number of minibatches")
     parser.add_argument("--num-runs", type=int, default=1, help="Number of runs per beta")
-    parser.add_argument("--num-epochs", type=int, default=0, help="Overide number of epochs")
+    parser.add_argument("--num-epochs", type=int, default=-1, help="Number of epochs to train")
     parser.add_argument("--text-attack-type", type=str, default="BAEGarg2019", help="Type of attack to use on textual models")
     args = parser.parse_args()
-    if args.loss_type == 'ppo' and (args.num_minibatches < 2):
-        raise ValueError
     return args
 
 if __name__ == "__main__":
@@ -470,4 +421,4 @@ if __name__ == "__main__":
     train_and_eval_cdlvm(data_class=args.data_class, betas=args.betas, gamma=args.gamma, epsilons=args.epsilons,
                          loss_type=args.loss_type, kl_rate_loss=args.kl_rate_loss, clip_grad=args.clip_grad,
                          clip_loss=args.clip_loss, num_minibatches=args.num_minibatches, num_runs=args.num_runs,
-                         num_epochs=args.num_epochs, text_attack_type=args.text_attack_type)
+                         num_epochs=args.num_epochs, text_attack_type=args.text_attack_type, device_name=args.device)

@@ -19,7 +19,7 @@ import wandb
 from torch.utils.tensorboard import SummaryWriter
 
 
-def loop_data(model, train_dataloader, test_dataloader, beta, writer, epochs,
+def loop_data(model, train_dataloader, test_dataloader, beta, gamma, writer, epochs,
               device, optimizer=None, scheduler=None, eta=0.001,
               num_minibatches=1,  loss_type='vib',
               clip_grad=False, clip_loss=False, kl_rate_loss=False, max_grad_norm=2):
@@ -98,7 +98,7 @@ def loop_data(model, train_dataloader, test_dataloader, beta, writer, epochs,
                     if clip_loss:
                         max_regularization_value = (abs(beta) * classification_loss).item()
                         min_regularization_value = torch.tensor(0).to(device)
-                        minibatch_loss = torch.clamp(rate_term, min=min_regularization_value, max=(max_regularization_value)) + classification_loss - torch.clamp(beta * batch_h_z_y, min=min_regularization_value, max=max_regularization_value)
+                        minibatch_loss = torch.clamp(abs(gamma) * rate_term, min=min_regularization_value, max=(max_regularization_value)) + classification_loss - torch.clamp(beta * batch_h_z_y, min=min_regularization_value, max=max_regularization_value)
                     else:
                         minibatch_loss = - batch_h_z_x + beta * (classification_loss - batch_h_z_y)
                 elif loss_type == 'vib':
@@ -191,7 +191,7 @@ def loop_data(model, train_dataloader, test_dataloader, beta, writer, epochs,
             model.train()
 
 
-def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100, 1000],
+def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100, 1000], gamma=1,
                          epsilons=[0.1, 0.35, 0.4, 0.45, 0.5], loss_type='vib',
                           kl_rate_loss=False, clip_grad=False, clip_loss=True,
                          num_minibatches=1, num_runs=1, num_epochs=0, text_attack_type='BAEGarg2019'):
@@ -353,7 +353,7 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
             scheduler = lr_scheduler.ExponentialLR(optimizer, gamma=0.97)
 
             try:
-                loop_data(vib_classifier, logits_train_data_loader, logits_test_data_loader, beta,
+                loop_data(vib_classifier, logits_train_data_loader, logits_test_data_loader, beta, gamma,
                         num_minibatches=num_minibatches, writer=writer, epochs=epochs, device=device,
                         optimizer=optimizer, scheduler=scheduler, loss_type=loss_type,
                         clip_grad=clip_grad, clip_loss=clip_loss, max_grad_norm=max_grad_norm,
@@ -446,6 +446,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-class", type=str, default="mnist", help="Kind of dataset to use: mnist, cifar, imagenet or yelp")
     parser.add_argument("--betas", nargs='+', type=float, default=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100, 1000], help="Betas to use for VIB or VUB")
+    parser.add_argument("--gamma", type=float, default=1, help="Optional hyperparameter to scale the rate term")
     parser.add_argument("--epsilons", nargs='+', type=float, default=[0.1, 0.35, 0.4, 0.45, 0.5], help="Epsilons to use for FGSM")
     parser.add_argument("--loss-type", type=str, default="vib", help="Which loss function to use: Either VIB, VUB or PPO or Vanilla")
     parser.add_argument("--kl-rate-loss", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True, help="Use KLD instead of entropy in first part of rate term in VUB")
@@ -466,7 +467,7 @@ if __name__ == "__main__":
     if args.seed:
         np.random.seed(args.seed)
         torch.manual_seed(args.seed)
-    train_and_eval_cdlvm(data_class=args.data_class, betas=args.betas, epsilons=args.epsilons,
+    train_and_eval_cdlvm(data_class=args.data_class, betas=args.betas, gamma=args.gamma, epsilons=args.epsilons,
                          loss_type=args.loss_type, kl_rate_loss=args.kl_rate_loss, clip_grad=args.clip_grad,
                          clip_loss=args.clip_loss, num_minibatches=args.num_minibatches, num_runs=args.num_runs,
                          num_epochs=args.num_epochs, text_attack_type=args.text_attack_type)

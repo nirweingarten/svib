@@ -15,7 +15,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.optim import lr_scheduler
 from tqdm import tqdm
-from helper import LogitsDataset, HybridModel, attack_and_eval, get_dataloaders, get_kld_between_multivariate_gaussians, get_multinomial_entropy, get_multivariate_gaussian_entropy, test_model
+from helper import HybridModel, attack_and_eval, get_dataloaders, get_multinomial_entropy, get_multivariate_gaussian_entropy, test_model
 from transformer_cdlvm import TransformerVIB, TransformerHybridModel, text_attacks
 import wandb
 from torch.utils.tensorboard import SummaryWriter
@@ -109,7 +109,6 @@ def loop_data(model, train_dataloader, test_dataloader, beta, gamma, writer, epo
         writer.add_scalar("charts/epoch_h_z_x", epoch_h_z_x_array[e], e)
         writer.add_scalar("charts/epoch_h_z_y", epoch_h_z_y_array[e], e)
         
-        # if loss_type == 'vub':
         writer.add_scalar("charts/epoch_rate_term", epoch_rate_term, e)
         writer.add_scalar("charts/epoch_distortion_term", epoch_distortion_term, e)
 
@@ -140,6 +139,7 @@ def loop_data(model, train_dataloader, test_dataloader, beta, gamma, writer, epo
             writer.add_scalar("charts/epoch_val_classification_loss", epoch_val_classification_loss, e)
             writer.add_scalar("charts/epoch_val_accuracy", acc, e)
             model.train()
+    return epoch_rate_term, epoch_distortion_term
 
 
 def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100, 1000], gamma=1,
@@ -305,7 +305,7 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
             scheduler = lr_scheduler.ExponentialLR(optimizer, gamma=0.97)
 
             try:
-                loop_data(vib_classifier, logits_train_data_loader, logits_test_data_loader, beta, gamma,
+                final_rate_term, final_distortion_term = loop_data(vib_classifier, logits_train_data_loader, logits_test_data_loader, beta, gamma,
                         num_minibatches=num_minibatches, writer=writer, epochs=epochs, device=device,
                         optimizer=optimizer, scheduler=scheduler, loss_type=loss_type,
                         clip_grad=clip_grad, clip_loss=clip_loss, max_grad_norm=max_grad_norm,
@@ -330,7 +330,9 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
                         'deep_word_attack_success_rate': deep_word_attack_success_rate,
                         'pwws_acc_under_attack': pwws_acc_under_attack,
                         'pwws_avg_pertrubed_words_prct': pwws_avg_pertrubed_words_prct,
-                        'pwws_attack_success_rate': pwws_attack_success_rate
+                        'pwws_attack_success_rate': pwws_attack_success_rate,
+                        'final_rate_term': final_rate_term,
+                        'final_distortion_term': final_distortion_term
                                             }
                     print(f'\n\
                         ###### Run summary: beta={beta} ######\n\
@@ -341,6 +343,8 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
                         pwws_attack_success_rate: {pwws_attack_success_rate}\n\
                         pwws_acc_under_attack: {pwws_acc_under_attack}\n\
                         pwws_avg_pertrubed_words_prct: {pwws_avg_pertrubed_words_prct}\n\
+                        final_rate_term: {final_rate_term}\n\
+                        final_distortion_term: {final_distortion_term}\n\
                         ')
 
                 else:
@@ -365,6 +369,8 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
                         'targeted_total_succesful_attacks_list': targeted_total_succesful_attacks_list,
                         'targeted_examples': targeted_examples,
                         'avg_l2_dist_for_sx_targeted_attack': avg_l2_dist_for_sx_targeted_attack,
+                        'final_rate_term': final_rate_term,
+                        'final_distortion_term': final_distortion_term
                     }
                     print(f'\n\
                         ###### Run summary: beta={beta} ######\n\
@@ -378,6 +384,8 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
                         targeted acc at eps={epsilons[0]}: {targeted_accuracies[0]}\n\
                         targeted acc at eps={epsilons[-1]}: {targeted_accuracies[-1]}\n\
                         avg l2 distance for succesful cw targeted attack: {avg_l2_dist_for_sx_targeted_attack}\n\
+                        final_rate_term: {final_rate_term}\n\
+                        final_distortion_term: {final_distortion_term}\n\
                         ')
             except ValueError as e:
                 raise e
@@ -392,7 +400,7 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
             print(f'Saved dict to {save_path}')
 
 # For debugging
-# train_and_eval_cdlvm('imdb', kl_rate_loss=False, clip_grad=False, clip_loss=True, loss_type='vub', num_minibatches=1, betas=[0.1], num_epochs=0, gamma=0.1)
+# train_and_eval_cdlvm('imdb', kl_rate_loss=False, clip_grad=False, clip_loss=True, loss_type='vub', num_minibatches=1, betas=[0.1], num_epochs=1, gamma=1)
 
 def parse_args():
     parser = argparse.ArgumentParser()

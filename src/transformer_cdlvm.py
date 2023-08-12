@@ -111,6 +111,8 @@ class TransformerHybridModel(nn.Module):
         self.base_model = base_model
         setattr(self.base_model, fc_name, torch.nn.Identity())
         self.vib_model = vib_model
+        self.base_model = self.base_model.to(device)
+        self.vib_model = self.vib_model.to(device)
         self.train_loss = []
         self.test_loss = []
         self.freeze_base()
@@ -193,9 +195,6 @@ def text_attacks(hybrid_model, dataset_name, device):
     Performs deep word bug and pwws untargeted blackbox attacks using the textattack API
     """
     os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # supress noisy tf logs
-    if device.index:
-        # make sure textattack uses the specified device
-        os.environ["CUDA_VISIBLE_DEVICES"] = str(device.index)
     tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
     model_adaptor = TransformerAdaptor(hybrid_model)
     model_adaptor = model_adaptor.to(device)

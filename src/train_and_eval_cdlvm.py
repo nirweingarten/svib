@@ -1,5 +1,4 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 from datetime import datetime
 from distutils.util import strtobool
 import argparse
@@ -167,27 +166,7 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
     device = torch.device(device_name)
     print(f'Using device {device_name}')
 
-    if data_class == 'mnist':
-        epochs = 250
-        hidden_size = 256
-        output_size = 10
-        pretrained_path = './pretrained_models/mnist_model.pkl'
-        fc_name = 'fc2'
-        target_label = 1
-        max_grad_norm = 0.001
-        transformation_mean = (0, 0, 0)
-        transformation_std = (0, 0, 0)
-    elif data_class == 'cifar':
-        epochs = 100
-        hidden_size = 1280
-        output_size = 100
-        pretrained_path = './pretrained_models/cifar_efficientnet.pkl'
-        fc_name = '_fc'
-        target_label = 15  # Camel
-        max_grad_norm = 2.5
-        transformation_mean = (0.4914, 0.4822, 0.4465)
-        transformation_std = (0.2023, 0.1994, 0.2010)
-    elif data_class == 'imagenet':
+    if data_class == 'imagenet':
         fc_name = 'fc'
         epochs = 100
         hidden_size = 2048
@@ -197,27 +176,11 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
         max_grad_norm = 5
         transformation_mean = (0.485, 0.456, 0.406)
         transformation_std = (0.229, 0.224, 0.225)
-    elif data_class in ('yelp', 'imdb', 'cola'):
+    elif data_class == 'imdb':
         fc_name = 'classifier'
         epochs = 200
         hidden_size = 768
         output_size = 2
-        pretrained_path = f'./pretrained_models/pretrained_bert_{data_class}.pkl'
-        target_label = 0  # Not relevant
-        max_grad_norm = 5
-    elif data_class.replace('-', '_') == 'mnli':
-        fc_name = 'classifier'
-        epochs = 200
-        hidden_size = 768
-        output_size = 3
-        pretrained_path = f'./pretrained_models/pretrained_bert_{data_class}.pkl'
-        target_label = 0  # Not relevant
-        max_grad_norm = 5
-    elif data_class.replace('-', '_') == 'ag_news':
-        fc_name = 'classifier'
-        epochs = 200
-        hidden_size = 768
-        output_size = 4
         pretrained_path = f'./pretrained_models/pretrained_bert_{data_class}.pkl'
         target_label = 0  # Not relevant
         max_grad_norm = 5
@@ -404,7 +367,7 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data-class", type=str, default="mnist", help="Kind of dataset to use: mnist, cifar, imagenet or yelp")
+    parser.add_argument("--data-class", type=str, default="imagenet", help="Kind of dataset to use: imagenet or imdb")
     parser.add_argument("--device", type=str, default="cpu", help="device to use, defaults to cpu")
     parser.add_argument("--betas", nargs='+', type=float, default=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100, 1000], help="Betas to use for VIB or VUB")
     parser.add_argument("--gamma", type=float, default=1, help="Optional hyperparameter to scale the rate term")

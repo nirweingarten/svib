@@ -1,28 +1,38 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 import torch
 from torch.distributions.normal import Normal
 import torch.nn as nn
-from constants import IMAGENET_TRANSFORM, DATASET_DIR, EPSILON, IMAGENET_LOGITS_TRAIN_DATALOADER_PATH, IMAGENET_LOGITS_VAL_DATALOADER_PATH, MNIST_LOGITS_TRAIN_DATALOADER_PATH, NP_EPSILON, NUM_WORKERS, TEXTUAL_DATASETS
+from constants import IMAGENET_TRANSFORM, DATASET_DIR, EPSILON, IMAGENET_LOGITS_TRAIN_DATALOADER_PATH, IMAGENET_LOGITS_VAL_DATALOADER_PATH, NP_EPSILON, NUM_WORKERS, TEXTUAL_DATASETS
 import cw
 import torch.nn.functional as F
 from tqdm import tqdm
-from constants import MNIST_LOGITS_TEST_DATALOADER_PATH
 import torchvision
 from transformer_cdlvm import encode
 from datasets import load_dataset
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
-from torchvision.datasets import CIFAR100, MNIST, ImageNet
-from transformers import BertForSequenceClassification, AutoTokenizer, PreTrainedModel
-from transformers.modeling_outputs import SequenceClassifierOutput
-from textattack.models.wrappers.huggingface_model_wrapper import HuggingFaceModelWrapper
+from torchvision.datasets import ImageNet
+from transformers import BertForSequenceClassification
 import dill
 import os
 import pickle
+
+
+class LogitsDataset(Dataset):
+    def __init__(self, data, labels):
+        self.data = data
+        self.labels = labels
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        x = self.data[idx]
+        y = self.labels[idx]
+        return x, y
 
 
 class VIB(nn.Module):
@@ -75,43 +85,10 @@ class VIB(nn.Module):
         return (mu, std), log_probs, logits
 
 
-class MNIST_CNN(nn.Module):
-    def __init__(self):
-        super(MNIST_CNN, self).__init__()
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.dropout = nn.Dropout(0.25)
-        self.fc1 = nn.Linear(64 * 7 * 7 * 4, 256)
-        self.fc2 = nn.Linear(256, 10)
-
-    def forward(self, x):
-        x = F.relu(self.conv1(x))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = x.view(-1, 64 * 7 * 7 * 4)
-        x = F.relu(self.fc1(x))
-        x = self.fc2(x)
-        return x
-
-
-class LogitsDataset(Dataset):
-    def __init__(self, data, labels):
-        self.data = data
-        self.labels = labels
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        x = self.data[idx]
-        y = self.labels[idx]
-        return x, y
-
-
 class HybridModel(nn.Module):
     """
     Head is a pretrained model, classifier is VIB
-    fc_name should be 'fc2' for inception-v3 (imagenet) and mnist-cnn, '_fc' for efficient-net (CIFAR)
+    fc_name should be 'fc2' for inception-v3 (imagenet)
     """
     def __init__(self, base_model, vib_model, device, fc_name, return_only_logits=False):
         super(HybridModel, self).__init__()
@@ -147,50 +124,7 @@ class HybridModel(nn.Module):
 
 
 def get_dataloaders(data_class, logits=False):
-    if data_class == 'mnist':
-        if logits:
-            with open(MNIST_LOGITS_TRAIN_DATALOADER_PATH, 'rb') as f:
-                train_data_loader = pickle.load(f)
-            with open(MNIST_LOGITS_TEST_DATALOADER_PATH, 'rb') as f:
-                val_data_loader = pickle.load(f)
-            return train_data_loader, val_data_loader
-        else:
-            dataset = MNIST
-            dataset_dir = './datasets/MNIST'
-            batch_size = 128
-            train_transform = transforms.Compose(
-                [transforms.Resize((28, 28)), transforms.ToTensor()])
-            test_transform = train_transform
-            train_kwargs = {'train': True}
-            test_kwargs = {'train': False}
-
-    elif data_class == 'cifar':
-        if logits:
-            with open(CIFAR_LOGITS_TRAIN_DATALOADER_PATH, 'rb') as f:
-                train_data_loader = pickle.load(f)
-            with open(CIFAR_LOGITS_TEST_DATALOADER_PATH, 'rb') as f:
-                val_data_loader = pickle.load(f)
-            return train_data_loader, val_data_loader
-        else:
-            dataset = CIFAR100
-            dataset_dir = './datasets/CIFAR'
-            batch_size = 32
-            train_transform = transforms.Compose([
-                transforms.Resize(224),
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomCrop(224, padding=4),
-                transforms.ToTensor(),
-                transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-            ])
-            test_transform = transforms.Compose([
-                transforms.Resize(224),
-                transforms.ToTensor(),
-                transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-            ])
-            train_kwargs = {'train': True}
-            test_kwargs = {'train': False}
-
-    elif data_class == 'imagenet':
+    if data_class.lower() == 'imagenet':
         if logits:
             with open(IMAGENET_LOGITS_TRAIN_DATALOADER_PATH, 'rb') as f:
                 train_data_loader = pickle.load(f)
@@ -212,7 +146,7 @@ def get_dataloaders(data_class, logits=False):
             train_kwargs = {'split': 'train'}
             test_kwargs = {'split': 'val'}
 
-    elif data_class in TEXTUAL_DATASETS:
+    elif data_class.lower() == 'imdb':
         if logits:
             logits_train_dataloader_path = f'./datasets/{data_class}/logits_dataloaders/logits_train_dataloader.pkl'
             logits_test_dataloader_path = f'./datasets/{data_class}/logits_dataloaders/logits_test_dataloader.pkl'
@@ -222,12 +156,7 @@ def get_dataloaders(data_class, logits=False):
                 val_data_loader = pickle.load(f)
             return train_data_loader, val_data_loader
         else:
-            if data_class == 'yelp':
-                dataset = load_dataset('yelp_polarity')
-            elif data_class == 'cola':
-                dataset = load_dataset('glue', 'cola')
-            else:
-                dataset = load_dataset(data_class)
+            dataset = load_dataset(data_class)
             dataset = dataset.map(encode, batched=True)
             dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'label'])
 
@@ -277,7 +206,6 @@ def fgsm_attack(data, epsilon, data_grad, is_targeted=False, is_image=True):
         perturbed_data = torch.clamp(perturbed_data, 0, 1)
     # Return the perturbed image
     return perturbed_data
-
 
 
 def run_adverserial_attacks(model, device, test_loader, epsilon, target_label=None, is_image=True, print_results=False, attack_type='fgs', mean=(), std=()):
@@ -381,7 +309,6 @@ def run_adverserial_attacks(model, device, test_loader, epsilon, target_label=No
         correct_perturbed_classifications = perturbed_pred.flatten(
         ) == labels[relevant_attack_idx]
 
-
         # Unsuccessful attack
         if target_label:
             unsuccessful_attack_vector = perturbed_pred.flatten() != target_label
@@ -458,7 +385,6 @@ def attack_and_eval(model, device, test_data_loader, target_label, epsilons, mea
         untargeted_accuracies.append(acc)
         untargeted_total_succesful_attacks_list.append(total_succesful_attacks)
         untargeted_examples.append(ex)
-
 
     return untargeted_accuracies, untargeted_examples, untargeted_total_succesful_attacks_list, targeted_accuracies, targeted_examples, targeted_total_succesful_attacks_list, avg_l2_dist_for_sx_attack
 
@@ -577,6 +503,33 @@ def test_model(model, test_data_loader, device):
     print(f"acc: {acc}")
     return acc
 
+
+def get_cnn_logits_dataloader(model, original_loader, device, batch_size=32, whiten=False):
+    model.fc = torch.nn.Identity()
+    logits_data_list = []
+    logits_labels_list = []
+    with torch.no_grad():
+        for x, y in tqdm(original_loader):
+            logits = model(x.to(device))
+            logits_data_list.append(logits.to(torch.device('cpu')))
+            logits_labels_list.append(y.to(torch.device('cpu')))
+
+    logits_data_set = LogitsDataset(torch.concat(logits_data_list), torch.concat(logits_labels_list))
+    logits_dataloader = DataLoader(logits_data_set, batch_size=batch_size, shuffle=True)
+    if whiten:
+        # Apply whitening to the features
+        scaler = StandardScaler()
+        outputs = scaler.fit_transform(torch.concat(logits_data_list).numpy())
+        pca = PCA()
+        whitened = pca.fit_transform(outputs)
+
+        whitened_logits_data_set = LogitsDataset(whitened, torch.concat(logits_labels_list))
+        whitened_logits_dataloader = DataLoader(whitened_logits_data_set, batch_size=batch_size, shuffle=True)
+        return whitened_logits_dataloader
+    else:
+        return logits_dataloader
+
+
 def get_transformer_logits_dataloader(model, original_loader, device, batch_size=8):
     logits_data_list = []
     logits_labels_list = []
@@ -592,6 +545,17 @@ def get_transformer_logits_dataloader(model, original_loader, device, batch_size
     logits_data_set = LogitsDataset(torch.concat(logits_data_list), torch.concat(logits_labels_list))
     logits_dataloader = DataLoader(logits_data_set, batch_size=batch_size, shuffle=True)
     return logits_dataloader
+
+
+def get_logits_dataloader(data_class, model, original_loader, device, batch_size=0, whiten=False):
+    if data_class == 'imagenet':
+        if batch_size == 0:
+            batch_size = 32
+        return get_cnn_logits_dataloader(model, original_loader, device, batch_size, whiten)
+    elif data_class == 'imdb':
+        if batch_size == 0:
+            batch_size = 8
+        return get_transformer_logits_dataloader(model, original_loader, device, batch_size)
 
 
 def create_directory(path):
@@ -618,7 +582,7 @@ def prepare_run(dataset_name, device):
         batch_size = 16
     elif dataset_name == 'imagenet':
         pretrained_model = torchvision.models.inception_v3(pretrained=True, transform_input=True)
-        pretrained_path = f'./pretrained_models/inceptionv3.pkl'
+        pretrained_path = './pretrained_models/inceptionv3.pkl'
         train_dataset = ImageNet(root=DATASET_DIR, split='train', transform=IMAGENET_TRANSFORM)
         val_dataset = ImageNet(root=DATASET_DIR, split='val', transform=IMAGENET_TRANSFORM)
         train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=32, shuffle=True)
@@ -628,12 +592,13 @@ def prepare_run(dataset_name, device):
     else:
         raise NotImplementedError
     with open(pretrained_path, 'wb') as f:
-        dill.dump(pretrained_model.to('cpu'), f)
+        torch.save(pretrained_model.to('cpu'), f)
     print(f'Saved model to {pretrained_path}')
+    _ = pretrained_model.eval()
     pretrained_model.__setattr__(classifier_layer_name, torch.nn.Identity())
     pretrained_model.to(device)
-    logits_train_dataloader = get_transformer_logits_dataloader(pretrained_model, train_dataloader, batch_size=batch_size, device=device)
-    logits_test_dataloader = get_transformer_logits_dataloader(pretrained_model, test_dataloader, batch_size=batch_size, device=device)
+    logits_train_dataloader = get_logits_dataloader(dataset_name, pretrained_model, train_dataloader, batch_size=batch_size, device=device)
+    logits_test_dataloader = get_logits_dataloader(dataset_name, pretrained_model, test_dataloader, batch_size=batch_size, device=device)
     
     logits_train_dataloader_path = f'./datasets/{dataset_name}/logits_dataloaders/logits_train_dataloader.pkl'
     logits_test_dataloader_path = f'./datasets/{dataset_name}/logits_dataloaders/logits_test_dataloader.pkl'

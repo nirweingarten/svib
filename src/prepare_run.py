@@ -1,5 +1,4 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 from helper import prepare_run
 import argparse
 import torch

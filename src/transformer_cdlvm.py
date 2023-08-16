@@ -1,5 +1,4 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import torch
 from transformers import AutoTokenizer
 import torch.nn as nn
@@ -102,7 +101,7 @@ class TransformerVIB(nn.Module):
 class TransformerHybridModel(nn.Module):
     """
     Head is a pretrained model, classifier is VIB
-    fc_name should be 'fc2' for inception-v3 (imagenet) and mnist-cnn, '_fc' for efficient-net (CIFAR)
+    fc_name should be 'classifier' for Bert (imdb)
     """
 
     def __init__(self, base_model, vib_model, device, fc_name, return_only_logits=False):

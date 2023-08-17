@@ -434,6 +434,12 @@ class L2Adversary(object):
         # of the $t$th class, where $t$ is the attack target or the image label
         #
         # noinspection PyArgumentList
+
+        # Using a small subset of the data as done in the submitted paper example requires expanding the targets vector
+        if targets_oh_var.size()[1] < pert_outputs_var.size()[1]:
+            zeros = torch.zeros((targets_oh_var.size()[0], pert_outputs_var.size()[1] - targets_oh_var.size()[1]), device=self.device)
+            targets_oh_var = torch.cat((targets_oh_var, zeros), dim=1)        
+
         target_activ_var = torch.sum(targets_oh_var * pert_outputs_var, 1)
         inf = 1e4  # sadly pytorch does not work with np.inf;
         # 1e4 is also used in Carlini's code

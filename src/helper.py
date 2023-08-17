@@ -371,8 +371,8 @@ def attack_and_eval(model, device, test_data_loader, target_label, epsilons, mea
     targeted_total_succesful_attacks_list = []
 
     # CW targeted attack. Using a subset otherwise this takes forever
-    test_subset_dataset = torch.utils.data.Subset(test_data_loader.dataset, range(len(test_data_loader.dataset) // 100))  # Using first 1% of data for targeted attacks
-    test_subset_dataloader = DataLoader(test_subset_dataset, batch_size=32, shuffle=False)  # Not shuffeling as we go over only a subset
+    test_subset_dataset = torch.utils.data.Subset(test_data_loader.dataset, range(max(200, len(test_data_loader.dataset)) // 100))  # Using first 1% of data for targeted attacks as it takes a very long time
+    test_subset_dataloader = DataLoader(test_subset_dataset, batch_size=32, shuffle=False)
     acc, total_succesful_attacks, ex, avg_l2_dist_for_sx_attack = run_adverserial_attacks(model, device, test_subset_dataloader, epsilon=1, is_image=False,
                                                                                                                     target_label=target_label, attack_type='cw', mean=mean, std=std)
     targeted_accuracies.append(acc)
@@ -505,7 +505,6 @@ def test_model(model, test_data_loader, device):
 
 
 def get_cnn_logits_dataloader(model, original_loader, device, batch_size=32, whiten=False):
-    model.fc = torch.nn.Identity()
     logits_data_list = []
     logits_labels_list = []
     with torch.no_grad():
@@ -595,7 +594,11 @@ def prepare_run(dataset_name, device):
         torch.save(pretrained_model.to('cpu'), f)
     print(f'Saved model to {pretrained_path}')
     _ = pretrained_model.eval()
-    pretrained_model.__setattr__(classifier_layer_name, torch.nn.Identity())
+    # pretrained_model.__setattr__(classifier_layer_name, torch.nn.Identity())
+    if dataset_name == 'imagenet':
+        pretrained_model.fc = torch.nn.Identity()
+    elif dataset_name == 'imdb':
+        pretrained_model.classifier = torch.nn.Identity()
     pretrained_model.to(device)
     logits_train_dataloader = get_logits_dataloader(dataset_name, pretrained_model, train_dataloader, batch_size=batch_size, device=device)
     logits_test_dataloader = get_logits_dataloader(dataset_name, pretrained_model, test_dataloader, batch_size=batch_size, device=device)

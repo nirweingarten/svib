@@ -10,7 +10,7 @@ from torch.distributions.normal import Normal
 import transformers
 from transformers.modeling_outputs import SequenceClassifierOutput
 from textattack.datasets import HuggingFaceDataset
-from textattack.attack_recipes import BAEGarg2019, DeepWordBugGao2018, PWWSRen2019
+from textattack.attack_recipes import DeepWordBugGao2018
 from textattack.goal_functions import UntargetedClassification
 from textattack.attack_results import SuccessfulAttackResult
 from textattack import Attacker, AttackArgs
@@ -22,9 +22,7 @@ from textattack.metrics.attack_metrics import (
 
 
 ATTACK_TYPES = {
-    'BAEGarg2019': BAEGarg2019,
-    'DeepWordBugGao2018': DeepWordBugGao2018,
-    'PWWSRen2019': PWWSRen2019
+    'DeepWordBugGao2018': DeepWordBugGao2018
 }
 
 tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
@@ -206,11 +204,8 @@ def text_attacks(hybrid_model, dataset_name, device):
         raise NotImplementedError
 
     deep_word_bug_attack = DeepWordBugGao2018.build(model_wrapper)
-    pwws_attack = PWWSRen2019.build(model_wrapper)
     
     print('### Running Deep Word Bug attack')
     original_acc, deep_word_acc_under_attack, deep_word_avg_pertrubed_words_prct, deep_word_attack_success_rate = attack_model(deep_word_bug_attack, dataset)
-    print('### Running PWWS attack')
-    _, pwws_acc_under_attack, pwws_avg_pertrubed_words_prct, pwws_attack_success_rate = attack_model(pwws_attack, dataset)
 
-    return original_acc, deep_word_acc_under_attack, deep_word_avg_pertrubed_words_prct, deep_word_attack_success_rate, pwws_acc_under_attack, pwws_avg_pertrubed_words_prct, pwws_attack_success_rate
+    return original_acc, deep_word_acc_under_attack, deep_word_avg_pertrubed_words_prct, deep_word_attack_success_rate

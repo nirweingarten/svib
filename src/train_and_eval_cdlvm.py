@@ -138,7 +138,7 @@ def loop_data(model, train_dataloader, test_dataloader, beta, gamma, writer, epo
             writer.add_scalar("charts/epoch_val_classification_loss", epoch_val_classification_loss, e)
             writer.add_scalar("charts/epoch_val_accuracy", acc, e)
             model.train()
-    return epoch_rate_term, epoch_distortion_term
+    return epoch_rate_term, 1 / epoch_classification_loss
 
 
 def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100, 1000], gamma=1,
@@ -172,7 +172,8 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
         hidden_size = 2048
         output_size = 1000
         pretrained_path = './pretrained_models/inceptionv3.pkl'
-        target_label = 805  # soccer ball
+        # target_label = 805  # soccer ball
+        target_label = 1  # When using only a subset of the dataset one must target an available label
         max_grad_norm = 5
         transformation_mean = (0.485, 0.456, 0.406)
         transformation_std = (0.229, 0.224, 0.225)
@@ -282,7 +283,7 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
                     hybrid_model = TransformerHybridModel(pretrained_model, vib_classifier, device, fc_name=fc_name)
                     hybrid_model.freeze_base()
                     hybrid_model = hybrid_model.to(device)
-                    test_accuracy, deep_word_acc_under_attack, deep_word_avg_pertrubed_words_prct, deep_word_attack_success_rate, pwws_acc_under_attack, pwws_avg_pertrubed_words_prct, pwws_attack_success_rate = text_attacks(hybrid_model, data_class, device)
+                    test_accuracy, deep_word_acc_under_attack, deep_word_avg_pertrubed_words_prct, deep_word_attack_success_rate = text_attacks(hybrid_model, data_class, device)
                     results_dict[run_name] = {
                         'dict_name': pkl_name,
                         'vib_classifier': vib_classifier.to('cpu'),
@@ -291,9 +292,6 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
                         'deep_word_acc_under_attack': deep_word_acc_under_attack,
                         'deep_word_avg_pertrubed_words_prct': deep_word_avg_pertrubed_words_prct,
                         'deep_word_attack_success_rate': deep_word_attack_success_rate,
-                        'pwws_acc_under_attack': pwws_acc_under_attack,
-                        'pwws_avg_pertrubed_words_prct': pwws_avg_pertrubed_words_prct,
-                        'pwws_attack_success_rate': pwws_attack_success_rate,
                         'final_rate_term': final_rate_term,
                         'final_distortion_term': final_distortion_term
                                             }
@@ -303,9 +301,6 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
                         deep_word_attack_success_rate: {deep_word_attack_success_rate}\n\
                         deep_word_acc_under_attack: {deep_word_acc_under_attack}\n\
                         deep_word_avg_pertrubed_words_prct: {deep_word_avg_pertrubed_words_prct}\n\
-                        pwws_attack_success_rate: {pwws_attack_success_rate}\n\
-                        pwws_acc_under_attack: {pwws_acc_under_attack}\n\
-                        pwws_avg_pertrubed_words_prct: {pwws_avg_pertrubed_words_prct}\n\
                         final_rate_term: {final_rate_term}\n\
                         final_distortion_term: {final_distortion_term}\n\
                         ')
@@ -383,6 +378,7 @@ def parse_args():
     parser.add_argument("--text-attack-type", type=str, default="BAEGarg2019", help="Type of attack to use on textual models")
     args = parser.parse_args()
     return args
+
 
 if __name__ == "__main__":
     args = parse_args()

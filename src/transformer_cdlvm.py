@@ -11,8 +11,6 @@ import transformers
 from transformers.modeling_outputs import SequenceClassifierOutput
 from textattack.datasets import HuggingFaceDataset
 from textattack.attack_recipes import DeepWordBugGao2018
-from textattack.goal_functions import UntargetedClassification
-from textattack.attack_results import SuccessfulAttackResult
 from textattack import Attacker, AttackArgs
 from textattack.metrics.attack_metrics import (
     AttackQueries,
@@ -30,13 +28,14 @@ tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
 
 class TransformerVIB(nn.Module):
     """
-    Classifier with stochastic layer and KL regularization
+    Transformer classifier with stochastic layer and KL regularization
+    This can be optimized with either VIB or VUB
     """
 
     def __init__(self, hidden_size, output_size, device):
         super(TransformerVIB, self).__init__()
         self.device = device
-        self.description = 'Vanilla IB VAE as per the paper'
+        self.description = 'Vanilla IB VAE as per the VIB paper'
         self.hidden_size = hidden_size
         self.k = hidden_size // 2
         self.output_size = output_size
@@ -98,7 +97,7 @@ class TransformerVIB(nn.Module):
 
 class TransformerHybridModel(nn.Module):
     """
-    Head is a pretrained model, classifier is VIB
+    Head is a pretrained model, classifier is stochastic transformer
     fc_name should be 'classifier' for Bert (imdb)
     """
 
@@ -107,6 +106,7 @@ class TransformerHybridModel(nn.Module):
         self.device = device
         self.base_model = base_model
         setattr(self.base_model, fc_name, torch.nn.Identity())
+        self.base_model.classifier = torch.nn.Identity()
         self.vib_model = vib_model
         self.base_model = self.base_model.to(device)
         self.vib_model = self.vib_model.to(device)
@@ -140,7 +140,7 @@ class TransformerHybridModel(nn.Module):
 
 class TransformerAdaptor(transformers.PreTrainedModel):
     """
-    Adapts between a TransformerHybridModel to a HuggingFaceModelWrapper
+    Adapts between a TransformerHybridModel to a HuggingFaceModelWrapper s.t. we can use the textattack package
     """
 
     def __init__(self, hybrid_model):

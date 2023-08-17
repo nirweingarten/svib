@@ -37,12 +37,13 @@ class LogitsDataset(Dataset):
 
 class VIB(nn.Module):
     """
-    Classifier with stochastic layer and KL regularization
+    Classifier with stochastic layer
+    This class can be optimized by both VIB and VUB
     """
     def __init__(self, hidden_size, output_size, device):
         super(VIB, self).__init__()
         self.device = device
-        self.description = 'Vanilla IB VAE as per the paper'
+        self.description = 'Vanilla IB VAE as per the VIB paper'
         self.hidden_size = hidden_size
         self.k = hidden_size // 2
         self.output_size = output_size
@@ -88,6 +89,7 @@ class VIB(nn.Module):
 class HybridModel(nn.Module):
     """
     Head is a pretrained model, classifier is VIB
+    Used for advesarial attacks
     fc_name should be 'fc2' for inception-v3 (imagenet)
     """
     def __init__(self, base_model, vib_model, device, fc_name, return_only_logits=False):
@@ -95,6 +97,7 @@ class HybridModel(nn.Module):
         self.device = device
         self.base_model = base_model
         setattr(self.base_model, fc_name, torch.nn.Identity())
+        self.base_model.fc = torch.nn.Identity()
         self.vib_model = vib_model
         self.train_loss = []
         self.test_loss = []
@@ -135,7 +138,6 @@ def get_dataloaders(data_class, logits=False):
             dataset = ImageNet
             dataset_dir = './datasets/imagenet/'
             batch_size = 32
-            # TODO: Consider adding data augmentation to train transform
             train_transform = transforms.Compose([
                 transforms.Resize(299),
                 transforms.CenterCrop(299),
@@ -348,7 +350,10 @@ def run_adverserial_attacks(model, device, test_loader, epsilon, target_label=No
 
     # Calculate final accuracy for this epsilon
     final_acc = correct / relevant_pertrubations
-    succesful_attack_rate = total_succesful_attacks.item() / relevant_pertrubations
+    if total_succesful_attacks == 0:
+        succesful_attack_rate = 0
+    else:
+        succesful_attack_rate = total_succesful_attacks.item() / relevant_pertrubations
     if print_results:
         print("Epsilon: {}\tTest Accuracy = {} / {} = {}\t %succesful attacks: {}\t Out of total of {} data points".format(epsilon,
             correct, relevant_pertrubations, final_acc, succesful_attack_rate, len(test_loader) * test_loader.batch_size))
@@ -455,6 +460,7 @@ def get_kld_between_multivariate_gaussians(mu1, std1, mu2, std2, epsilon=NP_EPSI
 def get_multinomial_entropy(logits, epsilon=EPSILON):
     """
     Receives unactivates logits
+    Returns simple discrete multinomial entropy
     epsilon replaces 0 probability that results from torch's low float resolution
     """
     logits = logits.squeeze(0).to(torch.float64)

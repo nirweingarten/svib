@@ -1,10 +1,6 @@
 """
 Carlini-Wagner attack (http://arxiv.org/abs/1608.04644).
 
-Referential implementation:
-
-- https://github.com/carlini/nn_robust_attacks.git (the original implementation)
-- https://github.com/rwightman/pytorch-nips2017-attack-example.git
 """
 import operator as op
 
@@ -171,7 +167,6 @@ class L2Adversary(object):
 
         Why to make ``box`` default to (-1., 1.) rather than (0., 1.)? TL;DR the
         domain of the problem in pytorch is [-1, 1] instead of [0, 1].
-        According to Xiang Xu (samxucmu@gmail.com)::
 
         > The reason is that in pytorch a transformation is applied first
         > before getting the input from the data loader. So image in range [0,1]
@@ -182,7 +177,6 @@ class L2Adversary(object):
 
         Why to ``optimizer_lr`` default to 1e-2? The optimizer used in Carlini's
         code adopts 1e-2. In another pytorch implementation
-        (https://github.com/rwightman/pytorch-nips2017-attack-example.git),
         though, the learning rate is set to 5e-4.
         """
         if len(c_range) != 2:

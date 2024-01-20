@@ -5,7 +5,7 @@ import argparse
 import torch
 import numpy as np
 from helper import VIB
-from constants import TEXTUAL_DATASETS, EPSILON
+from constants import TEXTUAL_DATASETS, EPSILON, MAX_ENT_IMAGENET, MAX_ENT_IMDB, MAX_ENT_GENERAL
 import numpy as np
 import torch
 import os
@@ -20,7 +20,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 
 def loop_data(model, train_dataloader, test_dataloader, beta, writer, epochs,
-              device, optimizer=None, loss_type='vib', clip_loss=False):
+              device, optimizer=None, scheduler=None, loss_type='vib', max_entropy=torch.tensor(1000.0)):
     """
     Main training loop
     Loss type is either vib or vub
@@ -42,6 +42,7 @@ def loop_data(model, train_dataloader, test_dataloader, beta, writer, epochs,
         epoch_total_kld = 0
         epoch_rate_term = 0
         epoch_distortion_term = 0
+        gradient_norms_per_batch = []
 
         for batch_num, (embeddings, labels) in enumerate(train_dataloader):
             x = embeddings.to(device)
@@ -67,45 +68,44 @@ def loop_data(model, train_dataloader, test_dataloader, beta, writer, epochs,
             epoch_distortion_term += distortion_term.item() / len(train_dataloader)
 
             if loss_type == 'vub':
-                if clip_loss:
-                    # Since we chose to scale distortion [H(Y|Z)] as in IB and not rate as in VIB very very high rate terms might interfere with SGD
-                    # Hence we've clipped them to allow stable learning. Further research is required to scale rate term instead.
-                    # Scaling rate instead of distortion might yield better results, albeit approaching an optimal distortion given rate, and not vice versa.
-                    max_regularization_value = (abs(beta) * classification_loss).item()
-                    min_regularization_value = torch.tensor(0).to(device)
-                    minibatch_loss = torch.clamp(rate_term, min=min_regularization_value, max=(max_regularization_value)) + classification_loss - torch.clamp(beta * batch_h_z_y, min=min_regularization_value, max=max_regularization_value)
-                else:
-                    minibatch_loss = - batch_h_z_x + classification_loss - beta * batch_h_z_y
+                batch_loss = classification_loss + beta * kld_from_std_normal - batch_h_z_y.clamp(max=max_entropy.item())
             elif loss_type == 'vib':
-                minibatch_loss = classification_loss + beta * kld_from_std_normal
+                batch_loss = classification_loss + beta * kld_from_std_normal
             else:
                 raise NotImplementedError
 
             optimizer.zero_grad()
-            minibatch_loss.backward()
+            batch_loss.backward()
+
+            gradient_norms_per_param = []
+            for param in model.parameters():
+                gradient_norm = torch.norm(param.grad).item()
+                gradient_norms_per_param.append(gradient_norm)
+            gradient_norms_per_batch.append(gradient_norms_per_param)
+
             optimizer.step()
 
             with torch.no_grad():
                 epoch_total_kld += kld_from_std_normal
                 epoch_classification_loss += classification_loss.item()
 
-            epoch_loss += minibatch_loss.item()
+            epoch_loss += batch_loss.item()
+        
+        if (e != 0) and not (e % 2):
+            scheduler.step()
 
+        average_gradient_norms_per_epoch = torch.mean(torch.tensor(gradient_norms_per_batch), dim=0)
         epoch_loss /= batch_num
         model.train_loss.append(epoch_loss)
-        writer.add_scalar(
-            "charts/epoch_classification_loss", epoch_classification_loss / len(train_dataloader), e)
-        writer.add_scalar(
-            "charts/epoch_total_kld", epoch_total_kld / len(train_dataloader), e)
-
+        writer.add_scalar("charts/epoch_classification_loss", epoch_classification_loss / len(train_dataloader), e)
+        writer.add_scalar("charts/epoch_total_kld", epoch_total_kld / len(train_dataloader), e)
+        writer.add_scalar("charts/lr", scheduler.get_last_lr()[-1], e)
         writer.add_scalar("charts/epoch_h_z_x", epoch_h_z_x_array[e], e)
         writer.add_scalar("charts/epoch_h_z_y", epoch_h_z_y_array[e], e)
         
         writer.add_scalar("charts/epoch_rate_term", epoch_rate_term, e)
         writer.add_scalar("charts/epoch_distortion_term", epoch_distortion_term, e)
-
-        if loss_type == 'dyn_beta':
-            writer.add_scalar("charts/epoch_dyn_beta", beta, e)
+        writer.add_scalar("charts/epoch_gradient_norm", average_gradient_norms_per_epoch, e)
 
         if (not ((e + 1) % 10)) or (e == 0):
             # test loss
@@ -167,13 +167,15 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
         target_label = 1  # When using only a subset of the dataset one must target an available label
         transformation_mean = (0.485, 0.456, 0.406)
         transformation_std = (0.229, 0.224, 0.225)
+        max_entropy = MAX_ENT_IMAGENET.to(device)
     elif data_class == 'imdb':
         fc_name = 'classifier'
-        epochs = 200
+        epochs = 150
         hidden_size = 768
         output_size = 2
         pretrained_path = f'./pretrained_models/pretrained_bert_{data_class}.pkl'
         target_label = 0  # Not relevant
+        max_entropy = MAX_ENT_IMDB.to(device)
     else:
         raise NotImplementedError
     
@@ -242,10 +244,11 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
                 vib_classifier = VIB(hidden_size, output_size, device).to(device)        
 
             optimizer = optim.Adam(filter(lambda p: p.requires_grad, vib_classifier.parameters()), LR, betas=(0.5, 0.999))
+            scheduler = lr_scheduler.ExponentialLR(optimizer, gamma=0.97)
 
             try:
                 final_rate_term, final_distortion_term = loop_data(vib_classifier, logits_train_data_loader, logits_test_data_loader, beta, 
-                        writer=writer, epochs=epochs, device=device, optimizer=optimizer, loss_type=loss_type, clip_loss=clip_loss)
+                        writer=writer, epochs=epochs, device=device, optimizer=optimizer, scheduler=scheduler, loss_type=loss_type, max_entropy=max_entropy)
                 print(f'### Finished training, evaluating... ###')
                 
                 if data_class in TEXTUAL_DATASETS:
@@ -254,7 +257,7 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
                     hybrid_model = TransformerHybridModel(pretrained_model, vib_classifier, device, fc_name=fc_name)
                     hybrid_model.freeze_base()
                     hybrid_model = hybrid_model.to(device)
-                    test_accuracy, deep_word_acc_under_attack, deep_word_avg_pertrubed_words_prct, deep_word_attack_success_rate = text_attacks(hybrid_model, data_class, device)
+                    test_accuracy, deep_word_acc_under_attack, deep_word_avg_pertrubed_words_prct, deep_word_attack_success_rate, pwws_acc_under_attack, pwws_avg_pertrubed_words_prct, pwws_attack_success_rate = text_attacks(hybrid_model, data_class, device)
                     results_dict[run_name] = {
                         'dict_name': pkl_name,
                         'vib_classifier': vib_classifier.to('cpu'),
@@ -263,6 +266,9 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
                         'deep_word_acc_under_attack': deep_word_acc_under_attack,
                         'deep_word_avg_pertrubed_words_prct': deep_word_avg_pertrubed_words_prct,
                         'deep_word_attack_success_rate': deep_word_attack_success_rate,
+                        'pwws_acc_under_attack': pwws_acc_under_attack,
+                        'pwws_avg_pertrubed_words_prct': pwws_avg_pertrubed_words_prct,
+                        'pwws_attack_success_rate': pwws_attack_success_rate,
                         'final_rate_term': final_rate_term,
                         'final_distortion_term': final_distortion_term
                                             }
@@ -272,6 +278,9 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
                         deep_word_attack_success_rate: {deep_word_attack_success_rate}\n\
                         deep_word_acc_under_attack: {deep_word_acc_under_attack}\n\
                         deep_word_avg_pertrubed_words_prct: {deep_word_avg_pertrubed_words_prct}\n\
+                        pwws_attack_success_rate: {pwws_attack_success_rate}\n\
+                        pwws_acc_under_attack: {pwws_acc_under_attack}\n\
+                        pwws_avg_pertrubed_words_prct: {pwws_avg_pertrubed_words_prct}\n\
                         final_rate_term: {final_rate_term}\n\
                         final_distortion_term: {final_distortion_term}\n\
                         ')

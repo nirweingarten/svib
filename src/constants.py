@@ -21,3 +21,6 @@ IMAGENET_TRANSFORM = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
+
+MAX_ENT_IMAGENET = torch.tensor(5.8972)  # Almost uiform disctribution of many possible outcomes
+MAX_ENT_IMDB = torch.tensor(0.6931)  # Uniform disctribution of 2 possible outcomes

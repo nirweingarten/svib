@@ -72,10 +72,7 @@ class VIB(nn.Module):
     def forward(self, x):
         z_params = self.encoder(x)
         mu = z_params[:, :self.k]
-        # softplus transformation (soft relu) and a -1 bias is added
-        std = F.softplus(z_params[:, self.k:] - 1, beta=1)
-        # std = z_params[:, self.k:]
-        # std = F.softplus(z_params[:, self.k:], beta=1)
+        std = F.softplus(z_params[:, self.k:] + 0.57, beta=1)
         if self.training:
             z = reparametrize(mu, std, self.device)
         else:
@@ -136,7 +133,8 @@ def get_dataloaders(data_class, logits=False):
             return train_data_loader, val_data_loader
         else:
             dataset = ImageNet
-            dataset_dir = './datasets/imagenet/'
+            # dataset_dir = './datasets/imagenet/'
+            dataset_dir = '/D/datasets/imagenet/'
             batch_size = 32
             train_transform = transforms.Compose([
                 transforms.Resize(299),
@@ -376,7 +374,7 @@ def attack_and_eval(model, device, test_data_loader, target_label, epsilons, mea
     targeted_total_succesful_attacks_list = []
 
     # CW targeted attack. Using a subset otherwise this takes forever
-    test_subset_dataset = torch.utils.data.Subset(test_data_loader.dataset, range(max(200, len(test_data_loader.dataset)) // 100))  # Using first 1% of data for targeted attacks as it takes a very long time
+    test_subset_dataset = torch.utils.data.Subset(test_data_loader.dataset, range(len(test_data_loader.dataset) // 100))  # Using first 1% of data for targeted attacks
     test_subset_dataloader = DataLoader(test_subset_dataset, batch_size=32, shuffle=False)
     acc, total_succesful_attacks, ex, avg_l2_dist_for_sx_attack = run_adverserial_attacks(model, device, test_subset_dataloader, epsilon=1, is_image=False,
                                                                                                                     target_label=target_label, attack_type='cw', mean=mean, std=std)

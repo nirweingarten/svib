@@ -5,7 +5,7 @@ import argparse
 import torch
 import numpy as np
 from helper import VIB
-from constants import TEXTUAL_DATASETS, EPSILON, MAX_ENT_IMAGENET, MAX_ENT_IMDB, MAX_ENT_GENERAL
+from constants import TEXTUAL_DATASETS, EPSILON, MAX_ENT_IMAGENET, MAX_ENT_IMDB, LR
 import numpy as np
 import torch
 import os
@@ -29,8 +29,6 @@ def loop_data(model, train_dataloader, test_dataloader, beta, writer, epochs,
     epsilon = EPSILON.to(device)
     model.train()
 
-    epoch_rate_term = 0
-    epoch_classification_loss = 0
     # This is H(Z|X)
     epoch_h_z_x_array = np.zeros(epochs)
     # This is H(Y|Z)
@@ -42,7 +40,6 @@ def loop_data(model, train_dataloader, test_dataloader, beta, writer, epochs,
         epoch_total_kld = 0
         epoch_rate_term = 0
         epoch_distortion_term = 0
-        gradient_norms_per_batch = []
 
         for batch_num, (embeddings, labels) in enumerate(train_dataloader):
             x = embeddings.to(device)
@@ -76,13 +73,6 @@ def loop_data(model, train_dataloader, test_dataloader, beta, writer, epochs,
 
             optimizer.zero_grad()
             batch_loss.backward()
-
-            gradient_norms_per_param = []
-            for param in model.parameters():
-                gradient_norm = torch.norm(param.grad).item()
-                gradient_norms_per_param.append(gradient_norm)
-            gradient_norms_per_batch.append(gradient_norms_per_param)
-
             optimizer.step()
 
             with torch.no_grad():
@@ -94,7 +84,6 @@ def loop_data(model, train_dataloader, test_dataloader, beta, writer, epochs,
         if (e != 0) and not (e % 2):
             scheduler.step()
 
-        average_gradient_norms_per_epoch = torch.mean(torch.tensor(gradient_norms_per_batch), dim=0)
         epoch_loss /= batch_num
         model.train_loss.append(epoch_loss)
         writer.add_scalar("charts/epoch_classification_loss", epoch_classification_loss / len(train_dataloader), e)
@@ -102,10 +91,8 @@ def loop_data(model, train_dataloader, test_dataloader, beta, writer, epochs,
         writer.add_scalar("charts/lr", scheduler.get_last_lr()[-1], e)
         writer.add_scalar("charts/epoch_h_z_x", epoch_h_z_x_array[e], e)
         writer.add_scalar("charts/epoch_h_z_y", epoch_h_z_y_array[e], e)
-        
         writer.add_scalar("charts/epoch_rate_term", epoch_rate_term, e)
         writer.add_scalar("charts/epoch_distortion_term", epoch_distortion_term, e)
-        writer.add_scalar("charts/epoch_gradient_norm", average_gradient_norms_per_epoch, e)
 
         if (not ((e + 1) % 10)) or (e == 0):
             # test loss
@@ -140,18 +127,15 @@ def loop_data(model, train_dataloader, test_dataloader, beta, writer, epochs,
 
 def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100, 1000], 
                          epsilons=[0.1, 0.35, 0.4, 0.45, 0.5], loss_type='vib',
-                         clip_loss=True, num_runs=1, num_epochs=0, device_name='cpu'):
+                         num_runs=1, num_epochs=0, device_name='cpu', target_label=805):
     """
     CDLVM == conditional deep latent variational model
     This is the main logic for training and evaluating
     """
-    LR = 1e-4
     results_dict = {}
     current_time = datetime.now()
     formatted_time = current_time.strftime("%d.%m_%H:%M")
     pkl_name = data_class + f'_{loss_type}'
-    if clip_loss:
-        pkl_name += '_clip_loss'
     save_path = f'./result_dicts/{pkl_name}_{formatted_time}.pkl'
 
     device = torch.device(device_name)
@@ -164,7 +148,7 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
         output_size = 1000
         pretrained_path = './pretrained_models/inceptionv3.pkl'
         # target_label = 805  # soccer ball
-        target_label = 1  # When using only a subset of the dataset one must target an available label
+        # target_label = 1  # When using only a subset of the dataset one must target an available label
         transformation_mean = (0.485, 0.456, 0.406)
         transformation_std = (0.229, 0.224, 0.225)
         max_entropy = MAX_ENT_IMAGENET.to(device)
@@ -257,7 +241,8 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
                     hybrid_model = TransformerHybridModel(pretrained_model, vib_classifier, device, fc_name=fc_name)
                     hybrid_model.freeze_base()
                     hybrid_model = hybrid_model.to(device)
-                    test_accuracy, deep_word_acc_under_attack, deep_word_avg_pertrubed_words_prct, deep_word_attack_success_rate, pwws_acc_under_attack, pwws_avg_pertrubed_words_prct, pwws_attack_success_rate = text_attacks(hybrid_model, data_class, device)
+                    _, deep_word_acc_under_attack, deep_word_avg_pertrubed_words_prct, deep_word_attack_success_rate, pwws_acc_under_attack, pwws_avg_pertrubed_words_prct, pwws_attack_success_rate = text_attacks(hybrid_model, data_class, device)
+                    test_accuracy = test_model(vib_classifier, logits_test_data_loader, device)
                     results_dict[run_name] = {
                         'dict_name': pkl_name,
                         'vib_classifier': vib_classifier.to('cpu'),
@@ -343,9 +328,10 @@ def parse_args():
     parser.add_argument("--epsilons", nargs='+', type=float, default=[0.1, 0.35, 0.4, 0.45, 0.5], help="Epsilons to use for FGSM")
     parser.add_argument("--loss-type", type=str, default="vib", help="Which loss function to use: Either VIB, VUB or Vanilla")
     parser.add_argument("--clip-loss", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True, help="Clip rate term in loss function")
-    parser.add_argument("--seed", type=int, default=0, help="seed of the experiment")
+    parser.add_argument("--seed", type=int, default=1, help="seed of the experiment")
     parser.add_argument("--num-runs", type=int, default=1, help="Number of runs per beta")
     parser.add_argument("--num-epochs", type=int, default=-1, help="Number of epochs to train")
+    parser.add_argument("--target-label", type=int, default=805, help="Index of target label in CW attacks. Note - Make sure this label exists when using a partial dataset")
     args = parser.parse_args()
     return args
 
@@ -356,5 +342,5 @@ if __name__ == "__main__":
         np.random.seed(args.seed)
         torch.manual_seed(args.seed)
     train_and_eval_cdlvm(data_class=args.data_class, betas=args.betas, epsilons=args.epsilons,
-                         loss_type=args.loss_type, clip_loss=args.clip_loss, num_runs=args.num_runs,
-                         num_epochs=args.num_epochs, device_name=args.device)
+                         loss_type=args.loss_type, num_runs=args.num_runs, num_epochs=args.num_epochs, 
+                         device_name=args.device, target_label=args.target_label)

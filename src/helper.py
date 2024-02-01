@@ -1,4 +1,5 @@
 import os
+import subprocess
 import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
@@ -620,3 +621,15 @@ def prepare_run(dataset_name, device):
     with open(logits_test_dataloader_path, 'wb') as f:
         pickle.dump(logits_test_dataloader, f)
     print('Saved dataloaders!')
+
+
+def popen_text_attack(recipe):
+    command = f"textattack attack --model bert-base-uncased-imdb --recipe {recipe} --num-examples 200"
+    process = subprocess.Popen(command.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    output, error = process.communicate()
+
+    if output:
+        print(output.decode("utf-8"))
+
+    if error:
+        print(error.decode("utf-8"))

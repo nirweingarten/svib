@@ -14,7 +14,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.optim import lr_scheduler
 from tqdm import tqdm
-from helper import HybridModel, attack_and_eval, get_dataloaders, get_multinomial_entropy, get_multivariate_gaussian_entropy, test_model
+from helper import HybridModel, attack_and_eval, get_dataloaders, get_multinomial_entropy, get_multivariate_gaussian_entropy, test_model, popen_text_attack
 from transformer_cdlvm import TransformerVIB, TransformerHybridModel, text_attacks
 from torch.utils.tensorboard import SummaryWriter
 
@@ -176,43 +176,47 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
 
     if loss_type == 'vanilla':
         print(f"\n### Evaluating pretrained vanilla model ###")
-        pretrained_model = torch.load(pretrained_path)
-        pretrained_model.to(device)
-        pretrained_model.eval()
-        vanilla_run_name = f'vanilla_model_{formatted_time}'
-        writer = SummaryWriter(f"runs/{vanilla_run_name}")
-        test_accuracy = test_model(pretrained_model, test_data_loader, device)
-        untargeted_accuracies, untargeted_examples, untargeted_total_succesful_attacks_list, targeted_accuracies, targeted_examples, targeted_total_succesful_attacks_list, avg_l2_dist_for_sx_targeted_attack = attack_and_eval(pretrained_model, device, test_data_loader, target_label, epsilons, mean=transformation_mean, std=transformation_std)
-        results_dict['pretrained_vanilla_model'] = {
-            'dict_name': pkl_name,
-            'beta': 0,
-            'fgs_epsilons': epsilons,
-            'test_accuracy': test_accuracy,
-            'untargeted_accuracies': untargeted_accuracies,
-            'untargeted_total_succesful_attacks_list': untargeted_total_succesful_attacks_list,
-            'untargeted_examples': untargeted_examples,
-            'targeted_accuracies': targeted_accuracies,
-            'targeted_total_succesful_attacks_list': targeted_total_succesful_attacks_list,
-            'targeted_examples': targeted_examples,
-            'avg_l2_dist_for_sx_targeted_attack': avg_l2_dist_for_sx_targeted_attack,
-        }
-        del(pretrained_model)
-        with open(save_path, 'wb') as f:
-            pickle.dump(results_dict, f)
-            print(f'Saved dict to {save_path}')
-        print(f'\n\
-            ###### Run summary: Vanilla model ######\n\
-            test acc: {test_accuracy}\n\
-            untargeted succesful attacks at eps={epsilons[0]}: {untargeted_total_succesful_attacks_list[0]}\n\
-            untargeted succesful attacks at eps={epsilons[-1]}: {untargeted_total_succesful_attacks_list[-1]}\n\
-            untargeted acc at eps={epsilons[0]}: {untargeted_accuracies[0]}\n\
-            untargeted acc at eps={epsilons[-1]}: {untargeted_accuracies[-1]}\n\
-            targeted succesful attacks at eps={epsilons[0]}: {targeted_total_succesful_attacks_list[0]}\n\
-            targeted succesful attacks at eps={epsilons[-1]}: {targeted_total_succesful_attacks_list[-1]}\n\
-            targeted acc at eps={epsilons[0]}: {targeted_accuracies[0]}\n\
-            targeted acc at eps={epsilons[-1]}: {targeted_accuracies[-1]}\n\
-            avg l2 distance for succesful cw targeted attack: {avg_l2_dist_for_sx_targeted_attack}\n\
-            ')
+        if data_class == 'imdb':  # Run textattacks completely from the library
+            popen_text_attack('deepwordbug')
+            popen_text_attack('pwws')
+        else:
+            pretrained_model = torch.load(pretrained_path)
+            pretrained_model.to(device)
+            pretrained_model.eval()
+            vanilla_run_name = f'vanilla_model_{formatted_time}'
+            writer = SummaryWriter(f"runs/{vanilla_run_name}")
+            test_accuracy = test_model(pretrained_model, test_data_loader, device)
+            untargeted_accuracies, untargeted_examples, untargeted_total_succesful_attacks_list, targeted_accuracies, targeted_examples, targeted_total_succesful_attacks_list, avg_l2_dist_for_sx_targeted_attack = attack_and_eval(pretrained_model, device, test_data_loader, target_label, epsilons, mean=transformation_mean, std=transformation_std)
+            results_dict['pretrained_vanilla_model'] = {
+                'dict_name': pkl_name,
+                'beta': 0,
+                'fgs_epsilons': epsilons,
+                'test_accuracy': test_accuracy,
+                'untargeted_accuracies': untargeted_accuracies,
+                'untargeted_total_succesful_attacks_list': untargeted_total_succesful_attacks_list,
+                'untargeted_examples': untargeted_examples,
+                'targeted_accuracies': targeted_accuracies,
+                'targeted_total_succesful_attacks_list': targeted_total_succesful_attacks_list,
+                'targeted_examples': targeted_examples,
+                'avg_l2_dist_for_sx_targeted_attack': avg_l2_dist_for_sx_targeted_attack,
+            }
+            del(pretrained_model)
+            with open(save_path, 'wb') as f:
+                pickle.dump(results_dict, f)
+                print(f'Saved dict to {save_path}')
+            print(f'\n\
+                ###### Run summary: Vanilla model ######\n\
+                test acc: {test_accuracy}\n\
+                untargeted succesful attacks at eps={epsilons[0]}: {untargeted_total_succesful_attacks_list[0]}\n\
+                untargeted succesful attacks at eps={epsilons[-1]}: {untargeted_total_succesful_attacks_list[-1]}\n\
+                untargeted acc at eps={epsilons[0]}: {untargeted_accuracies[0]}\n\
+                untargeted acc at eps={epsilons[-1]}: {untargeted_accuracies[-1]}\n\
+                targeted succesful attacks at eps={epsilons[0]}: {targeted_total_succesful_attacks_list[0]}\n\
+                targeted succesful attacks at eps={epsilons[-1]}: {targeted_total_succesful_attacks_list[-1]}\n\
+                targeted acc at eps={epsilons[0]}: {targeted_accuracies[0]}\n\
+                targeted acc at eps={epsilons[-1]}: {targeted_accuracies[-1]}\n\
+                avg l2 distance for succesful cw targeted attack: {avg_l2_dist_for_sx_targeted_attack}\n\
+                ')
         return
 
     for beta in betas:

@@ -134,8 +134,6 @@ def get_dataloaders(data_class, logits=False):
             return train_data_loader, val_data_loader
         else:
             dataset = ImageNet
-            # dataset_dir = './datasets/imagenet/'
-            dataset_dir = '/D/datasets/imagenet/'
             batch_size = 32
             train_transform = transforms.Compose([
                 transforms.Resize(299),
@@ -170,14 +168,14 @@ def get_dataloaders(data_class, logits=False):
     else:
         raise NotImplementedError
 
-    if os.path.isdir(dataset_dir):
-        train_data = dataset(root=dataset_dir, transform=train_transform, **train_kwargs)
-        test_data = dataset(root=dataset_dir, transform=test_transform, **test_kwargs)
+    if os.path.isdir(DATASET_DIR):
+        train_data = dataset(root=DATASET_DIR, transform=train_transform, **train_kwargs)
+        test_data = dataset(root=DATASET_DIR, transform=test_transform, **test_kwargs)
     else:
         os.mkdir(DATASET_DIR)
-        train_data = dataset(root=dataset_dir, train=True,
+        train_data = dataset(root=DATASET_DIR, train=True,
                                 download=True, transform=train_transform)
-        test_data = dataset(root=dataset_dir, train=False,
+        test_data = dataset(root=DATASET_DIR, train=False,
                                 download=True, transform=test_transform)
 
     train_loader = DataLoader(train_data,
@@ -348,11 +346,15 @@ def run_adverserial_attacks(model, device, test_loader, epsilon, target_label=No
                 ), perturbed_pred[successful_attack_idx][0].item(), adv_ex))
 
     # Calculate final accuracy for this epsilon
-    final_acc = correct / relevant_pertrubations
-    if total_succesful_attacks == 0:
-        succesful_attack_rate = 0
+    if relevant_pertrubations == 0:
+        final_acc = 0
+        succesful_attack_rate = None
     else:
-        succesful_attack_rate = total_succesful_attacks.item() / relevant_pertrubations
+        final_acc = correct / relevant_pertrubations
+        if total_succesful_attacks == 0:
+            succesful_attack_rate = 0
+        else:
+            succesful_attack_rate = total_succesful_attacks.item() / relevant_pertrubations
     if print_results:
         print("Epsilon: {}\tTest Accuracy = {} / {} = {}\t %succesful attacks: {}\t Out of total of {} data points".format(epsilon,
             correct, relevant_pertrubations, final_acc, succesful_attack_rate, len(test_loader) * test_loader.batch_size))
@@ -375,7 +377,13 @@ def attack_and_eval(model, device, test_data_loader, target_label, epsilons, mea
     targeted_total_succesful_attacks_list = []
 
     # CW targeted attack. Using a subset otherwise this takes forever
-    test_subset_dataset = torch.utils.data.Subset(test_data_loader.dataset, range(len(test_data_loader.dataset) // 100))  # Using first 1% of data for targeted attacks
+    if len(test_data_loader.dataset) < 1000:
+        # Very small dataset, no use dividing
+        divider = 1
+    else:
+        # Using first 1% of data for targeted attacks
+        divider = 100
+    test_subset_dataset = torch.utils.data.Subset(test_data_loader.dataset, range(len(test_data_loader.dataset) // divider))
     test_subset_dataloader = DataLoader(test_subset_dataset, batch_size=32, shuffle=False)
     acc, total_succesful_attacks, ex, avg_l2_dist_for_sx_attack = run_adverserial_attacks(model, device, test_subset_dataloader, epsilon=1, is_image=False,
                                                                                                                     target_label=target_label, attack_type='cw', mean=mean, std=std)

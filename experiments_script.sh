@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# To reconstruct the experiments in the paper download and use the complete imagenet 2012 dataset from https://www.image-net.org/. 
+# Otherwise when using the provided subset please set --target-label to a number between 0 and 9 for imagenet experiments
+# For devices other than CUDA please change cuda to cpu
+
 timestamp=$(date +'%Y%m%d%H%M')
 
 echo -e "\n\nPREPARE RUN IMDB\n\n" | tee -a ./run_logs/${timestamp}_run.txt;
@@ -24,12 +28,12 @@ python src/prepare_run.py --device cuda --data-class imagenet | tee -a ./run_log
 
 echo VANILLA IMAGENET | tee -a ./run_logs/${timestamp}_run.txt;
 
-python src/train_and_eval_cdlvm.py --data-class imdb --loss-type vanilla --device cuda | tee -a ./run_logs/${timestamp}_run.txt;
+python src/train_and_eval_cdlvm.py --data-class imagenet --loss-type vanilla --target-label 805 --device cuda | tee -a ./run_logs/${timestamp}_run.txt;
 
 echo -e "\n\nVIB IMAGENET\n\n" | tee -a ./run_logs/${timestamp}_run.txt;
 
-python src/train_and_eval_cdlvm.py --data-class imagenet --loss-type vib --num-runs 5 --betas 0.001 0.01 0.1 --num-epochs 100 --device cuda | tee -a ./run_logs/${timestamp}_run.txt;
+python src/train_and_eval_cdlvm.py --data-class imagenet --loss-type vib --num-runs 5 --betas 0.001 0.01 0.1 --num-epochs 100 --target-label 805 --device cuda | tee -a ./run_logs/${timestamp}_run.txt;
 
 echo -e "\n\nVUB IMDB\n\n" | tee -a ./run_logs/${timestamp}_run.txt;
 
-python src/train_and_eval_cdlvm.py --data-class imagenet --loss-type vub --num-runs 5 --betas 0.001 0.01 0.1 --num-epochs 100 --device cuda | tee -a ./run_logs/${timestamp}_run.txt;
+python src/train_and_eval_cdlvm.py --data-class imagenet --loss-type vub --num-runs 5 --betas 0.001 0.01 0.1 --num-epochs 100 --target-label 805 --device cuda | tee -a ./run_logs/${timestamp}_run.txt;

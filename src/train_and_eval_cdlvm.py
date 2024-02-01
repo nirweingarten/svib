@@ -172,7 +172,11 @@ def train_and_eval_cdlvm(data_class, betas=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100
     # The original test dataloader is used for adverarial attacks
     _, test_data_loader = get_dataloaders(data_class, logits=False)
     if (len(logits_train_data_loader) < 100) or (len(logits_test_data_loader) < 100):
-        print("### Detected a very small dataset. If using imagenet it is strongly recommended to downlaod the complete dataset. See README for more")
+        print("### Detected a very small dataset. To reconstruct original results please use the complete dataset. To excatly reconstruct for imagenet also set the imagenet target lable to 805. See README for more")
+    if data_class == 'imagenet':
+        dataset_len = len(test_data_loader.dataset.classes)
+        if dataset_len <= target_label:
+            raise ValueError(f"The user defined target label {target_label} does not exist in the dataset, that has classes up to {dataset_len}. Change the target label or use the complete dataset")
 
     if loss_type == 'vanilla':
         print(f"\n### Evaluating pretrained vanilla model ###")
@@ -335,7 +339,7 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=1, help="seed of the experiment")
     parser.add_argument("--num-runs", type=int, default=1, help="Number of runs per beta")
     parser.add_argument("--num-epochs", type=int, default=-1, help="Number of epochs to train")
-    parser.add_argument("--target-label", type=int, default=805, help="Index of target label in CW attacks. Note - Make sure this label exists when using a partial dataset")
+    parser.add_argument("--target-label", type=int, default=805, help="Index of target label in CW attacks. To exactly reconstruct original results use a complete dataset and label 805 (Soccer ball)")
     args = parser.parse_args()
     return args
 

@@ -1,9 +1,9 @@
-# VUB - Variational Upper Bound for the Information Bottleneck Objective
+# SVIB - Supervised Variational Information Bottleneck Objective
 
 MIT license
 
-This library implements the methods described in the paper 'Tighter Bounds on the Information Bottleneck with Application to Deep Learning'.
-The information bottleneck (IB) is an information theoretic approach for machine learning optimization. VUB is an upper bound for the IB objective that is computable and optimizable in stochastic DNN settings. This Library allows the reconstruction of the experiments demonstrated in the paper.
+This library implements the methods described in the paper 'Revisiting the variational information bottleneck'.
+The information bottleneck (IB) is an information theoretic approach for machine learning optimization. SVIB is an upper bound for the IB objective that is computable and optimizable in stochastic DNN settings. This Library allows the reconstruction of the experiments demonstrated in the paper.
 
 <!-- Link to the paper [ paper](https://add_link). -->  This will be filled once the paper is published
 
@@ -30,7 +30,7 @@ pip install -r requirements.txt
 # Notes on data:
 Two datasets are supported in this repo: ImageNet image classification and IMDB nlp sentiment analysis.
 Both datasets need to be preprocessed before used for training and evaluation.
-Preprocessing involves saving a local 'logits dataset' that will be used to train the VIB and VUB classifiers.
+Preprocessing involves saving a local 'logits dataset' that will be used to train the VIB and SVIB classifiers.
 This repo comes with a 40MB sample of the original ImageNet dataset. The original experiments presented in the paper used the first 500K images. To get the complete dataset and truely reconstruct the experiments one must sign up and download the original 2012 dataset from [link](https://www.image-net.org) to the datasets/imagenet folder and unzip it there.
 The IMDB dataset is downloaded automatically upon running the script.
 When using the provided toy ImageNet dataset please change the target-label argument to any number between 0 and 9, otherwise the program will raise a ValueError.
@@ -50,7 +50,7 @@ python src/prepare_run.py --device <cuda \ cpu> --data-class imdb
 ```
 
 This command will download and save a pretrained model and process and create a logits dataset. Both will be stored on your local machine.
-After the pretrained models and logits datasets are saved, we proceed to the experiments. The following commands replicate the ones done in the paper: Each loss function (VIB and VUB) are trained pre dataset (ImageNet and IMDB). Each training session includes 3 runs per beta value. ImageNet is run for 100 epochs and IMDB for 150. in both casses the regularization terms are clipped not to surpass the CH term for stable learning.
+After the pretrained models and logits datasets are saved, we proceed to the experiments. The following commands replicate the ones done in the paper: Each loss function (VIB and SVIB) are trained pre dataset (ImageNet and IMDB). Each training session includes 3 runs per beta value. ImageNet is run for 100 epochs and IMDB for 150. in both casses the regularization terms are clipped not to surpass the CH term for stable learning.
 
 ```bash
 python src/train_and_eval_cdlvm.py --device cuda --data-class imagenet --betas 0.1 0.01 0.001 --num-runs 5 --loss-type vib --num-epochs 100 --target-label 805
@@ -67,9 +67,9 @@ python src/train_and_eval_cdlvm.py --device cuda --data-class imagenet --loss-ty
 textattack attack --recipe deepwordbug --model bert-base-uncased-imdb --dataset-from-huggingface imdb --num-examples 200
 ```
 
-## Citing VUB
+## Citing SVIB
 
-If you use VUB in your work, please cite our paper [paper] <Add link once published>
+If you use SVIB in your work, please cite our paper [paper] <Add link once published>
 
 ```bibtex
 @article{,

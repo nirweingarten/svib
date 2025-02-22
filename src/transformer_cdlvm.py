@@ -7,6 +7,8 @@ from transformers import PreTrainedModel
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from torch.distributions.normal import Normal
+from torch.distributions.independent import Independent
+from ceb_utils import BackwardsEncoder
 import transformers
 from transformers.modeling_outputs import SequenceClassifierOutput
 from textattack.datasets import HuggingFaceDataset
@@ -32,12 +34,16 @@ class TransformerVIB(nn.Module):
     This can be optimized with either VIB or VUB
     """
 
-    def __init__(self, hidden_size, output_size, device):
+    def __init__(self, hidden_size, output_size, device, is_ceb=False, trick=''):
         super(TransformerVIB, self).__init__()
         self.device = device
         self.description = 'Vanilla IB VAE as per the VIB paper'
         self.hidden_size = hidden_size
-        self.k = hidden_size // 2
+        self.trick = trick
+        if 'noise' in trick:
+            self.k = hidden_size
+        else:
+            self.k = hidden_size // 2
         self.output_size = output_size
         self.train_loss = []
         self.test_loss = []
@@ -46,13 +52,16 @@ class TransformerVIB(nn.Module):
             nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
             nn.Linear(hidden_size, hidden_size),
-            nn.ReLU()
+            # nn.ReLU() removed as per ceb
         )
         self.classifier = nn.Linear(self.k, output_size)
         # These are cheats to make 'drill' save everythung we need in one pickle
         self.softplus = F.softplus
         self.normal = torch.normal
         self.Normal = Normal
+        self.is_ceb = is_ceb
+        if is_ceb:
+            self.backwards_encoder = BackwardsEncoder(self.k, output_size, device)
 
         # Xavier initialization
         for _, module in self._modules.items():
@@ -60,6 +69,10 @@ class TransformerVIB(nn.Module):
                 nn.init.xavier_uniform_(
                     module.weight, gain=nn.init.calculate_gain('relu'))
                 module.bias.data.zero_()
+                continue
+            if isinstance(module, BackwardsEncoder):
+                nn.init.xavier_uniform_(module.encoder.weight, gain=nn.init.calculate_gain('relu'))
+                module.encoder.bias.data.zero_()
                 continue
             for layer in module:
                 if isinstance(layer, nn.Linear) or isinstance(layer, nn.Conv2d):
@@ -77,22 +90,30 @@ class TransformerVIB(nn.Module):
         eps = self.normal(0, 1, size=std.size()).to(self.device)
         return mu + eps * std
 
-    def forward(self, x):
+    def forward(self, x, y=None):
         x = x.to(self.device)
         z_params = self.encoder(x)
-        mu = z_params[:, :self.k]
-#         std = torch.nn.functional.softplus(z_params[:, self.k:] - 1, beta=1)
-        std = self.softplus(z_params[:, self.k:] - 1, beta=1)
+        if 'noise' in self.trick:
+            mu = z_params
+            std = torch.ones_like(mu)
+        else:
+            mu = z_params[:, :self.k]
+            std = self.softplus(z_params[:, self.k:] - 1, beta=1)
         if self.training:
             z = self.reparametrize(mu, std)
         else:
             z = mu.clone().unsqueeze(0)
-        n = self.Normal(mu, std)
-        # These may be positive as this is a PDF
-        log_probs = n.log_prob(z.squeeze(0))
+        # n = self.Normal(mu, std)
+        e_z_x_dist = Independent(Normal(mu, std), 1)
+        h_z_x = -e_z_x_dist.log_prob(z.squeeze(0))  # These may be positive as this is a PDF
 
         logits = self.classifier(z)
-        return (mu, std), log_probs, logits
+        if self.is_ceb and self.training:
+            b_z_y_dist, backwards_mu = self.backwards_encoder(y)
+            h_z_y = -b_z_y_dist.log_prob(z.squeeze(0))
+            return (mu, std), h_z_x, logits, h_z_y, b_z_y_dist, e_z_x_dist
+        else:
+            return (mu, std), h_z_x, logits
 
 
 class TransformerHybridModel(nn.Module):

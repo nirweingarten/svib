@@ -5,6 +5,7 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 import torch
 from torch.distributions.normal import Normal
+from torch.distributions.independent import Independent
 import torch.nn as nn
 from constants import IMAGENET_TRANSFORM, DATASET_DIR, EPSILON, IMAGENET_LOGITS_TRAIN_DATALOADER_PATH, IMAGENET_LOGITS_VAL_DATALOADER_PATH, NP_EPSILON, NUM_WORKERS, TEXTUAL_DATASETS
 import cw
@@ -17,7 +18,7 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 from torchvision.datasets import ImageNet
 from transformers import BertForSequenceClassification
-import dill
+from ceb_utils import BackwardsEncoder
 import os
 import pickle
 
@@ -35,53 +36,74 @@ class LogitsDataset(Dataset):
         y = self.labels[idx]
         return x, y
 
-
 class VIB(nn.Module):
     """
     Classifier with stochastic layer
     This class can be optimized by both VIB and VUB
     """
-    def __init__(self, hidden_size, output_size, device):
+    def __init__(self, hidden_size, output_size, device, is_ceb=False, trick=''):
         super(VIB, self).__init__()
         self.device = device
         self.description = 'Vanilla IB VAE as per the VIB paper'
         self.hidden_size = hidden_size
-        self.k = hidden_size // 2
+        if 'noise' in trick:
+            self.k = hidden_size
+        else:
+            self.k = hidden_size // 2
         self.output_size = output_size
         self.train_loss = []
         self.test_loss = []
+        self.is_ceb = is_ceb
+        self.trick = trick
+
+        if is_ceb:
+            self.backwards_encoder = BackwardsEncoder(self.k, output_size, device)
 
         self.encoder = nn.Sequential(
             nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
             nn.Linear(hidden_size, hidden_size),
-            nn.ReLU()
+            # nn.ReLU() Removed as per ceb
         )
         self.classifier = nn.Linear(self.k, output_size)
 
         # Xavier initialization
         for _, module in self._modules.items():
             if isinstance(module, nn.Linear) or isinstance(module, nn.Conv2d):
-                        nn.init.xavier_uniform_(module.weight, gain=nn.init.calculate_gain('relu'))
-                        module.bias.data.zero_()
-                        continue
+                nn.init.xavier_uniform_(module.weight, gain=nn.init.calculate_gain('relu'))
+                module.bias.data.zero_()
+                continue
+            if isinstance(module, BackwardsEncoder):
+                nn.init.xavier_uniform_(module.encoder.weight, gain=nn.init.calculate_gain('relu'))
+                module.encoder.bias.data.zero_()
+                continue
             for layer in module:
                 if isinstance(layer, nn.Linear) or isinstance(layer, nn.Conv2d):
                             nn.init.xavier_uniform_(layer.weight, gain=nn.init.calculate_gain('relu'))
                             layer.bias.data.zero_()
 
-    def forward(self, x):
+    def forward(self, x, y=None):
         z_params = self.encoder(x)
-        mu = z_params[:, :self.k]
-        std = F.softplus(z_params[:, self.k:] + 0.57, beta=1)
+        if 'noise' in self.trick:
+            mu = z_params
+            std = torch.ones_like(mu)
+        else:
+            mu = z_params[:, :self.k]
+            std = F.softplus(z_params[:, self.k:] + 0.57, beta=1)
         if self.training:
             z = reparametrize(mu, std, self.device)
         else:
             z = mu.clone().unsqueeze(0)
-        n = Normal(mu, std)
-        log_probs = n.log_prob(z.squeeze(0))  # These may be positive as this is a PDF
+        e_z_x = Independent(Normal(mu, std), 1)
+        h_z_x = -e_z_x.log_prob(z.squeeze(0))  # These may be positive as this is a PDF
         logits = self.classifier(z)
-        return (mu, std), log_probs, logits
+
+        if self.is_ceb and self.training:
+            b_z_y_dist, backwards_mu = self.backwards_encoder(y)
+            h_z_y = -b_z_y_dist.log_prob(z.squeeze(0))
+            return (mu, std), h_z_x, logits, h_z_y, b_z_y_dist, e_z_x
+        else:
+            return (mu, std), h_z_x, logits
 
 
 class HybridModel(nn.Module):
@@ -641,3 +663,12 @@ def popen_text_attack(recipe):
 
     if error:
         print(error.decode("utf-8"))
+
+def lerp(global_step, start_step, end_step, start_val, end_val):
+     """Utility function to linearly interpolate two values."""
+     interp = (global_step - start_step) / (end_step - start_step)
+     interp = max(0.0, min(1.0, interp))
+     return start_val * (1.0 - interp) + end_val * interp
+
+def beta_to_gamma(beta):
+    return 1.0 / np.exp(beta)

@@ -43,7 +43,7 @@ def loop_data(model, train_dataloader, test_dataloader, beta, writer, epochs,
         epoch_rate_term = 0
         epoch_distortion_term = 0
 
-        if ('anneal' in trick) and (e <= (epochs // 3.5)):
+        if ('anneal' in trick) and (e <= (epochs // 3.5)) and (loss_type == 'ceb'):
             if e == 0:
                 target_gamma = beta
             beta = lerp(e, 0, int(epochs // 3.5), beta_to_gamma(100.0), target_gamma)

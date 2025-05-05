@@ -5,7 +5,7 @@ MIT license
 This library implements the methods described in the paper 'The Supervised Information Bottleneck'.
 The information bottleneck (IB) is an information theoretic approach for machine learning optimization. SVIB is an upper bound for the IB objective that is computable and optimizable in stochastic DNN settings. This Library allows the reconstruction of the experiments demonstrated in the paper.
 
-[👉🏻 link to paper](https://www.mdpi.com/1099-4300/27/5/452)
+👉🏻 [link to paper](https://www.mdpi.com/1099-4300/27/5/452)
 
 
 ## Get started
